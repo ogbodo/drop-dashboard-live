@@ -55,6 +55,7 @@ export function LoginForm() {
         <input
           autoComplete="username"
           onChange={(event) => setUsername(event.target.value)}
+          placeholder="Enter your portal username"
           required
           value={username}
         />
@@ -64,6 +65,7 @@ export function LoginForm() {
         <input
           autoComplete="current-password"
           onChange={(event) => setPassword(event.target.value)}
+          placeholder="Enter your password"
           required
           type="password"
           value={password}

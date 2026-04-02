@@ -1,0 +1,2 @@
+-- Historical placeholder retained so local migration history matches the
+-- remote project state.

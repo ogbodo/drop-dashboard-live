@@ -25,8 +25,12 @@ export async function GET(request: NextRequest) {
 
     assertDashboardEnv();
     const session = await invokeDashboardEdge<{
+      accountId?: string | null;
       authenticated: boolean;
+      displayName?: string | null;
       expiresAt: number;
+      partnerId?: string | null;
+      role: "admin" | "partner";
       username: string;
     }>("auth/session", {
       headers: {
@@ -36,8 +40,12 @@ export async function GET(request: NextRequest) {
     });
 
     return jsonSuccess({
+      accountId: session.accountId ?? null,
       authenticated: true,
+      displayName: session.displayName ?? null,
       expiresAt: session.expiresAt,
+      partnerId: session.partnerId ?? null,
+      role: session.role,
       username: session.username,
     });
   } catch (error) {

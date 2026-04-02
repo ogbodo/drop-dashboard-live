@@ -11,6 +11,7 @@
     "hash:admin-password": "node scripts/hash-admin-password.mjs"
   },
   "dependencies": {
+    "@supabase/supabase-js": "2.87.1",
     "next": "16.2.2",
     "react": "19.2.4",
     "react-dom": "19.2.4"

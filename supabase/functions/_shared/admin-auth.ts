@@ -1,11 +1,20 @@
 export const ADMIN_SESSION_DURATION_MS = 1000 * 60 * 60 * 12;
 
-type SessionPayload = {
+export type DashboardAccountRole = "admin" | "partner";
+
+export type SessionIdentity = {
+  accountId?: string | null;
+  displayName?: string | null;
+  partnerId?: string | null;
+  role: DashboardAccountRole;
+  username: string;
+};
+
+type SessionPayload = SessionIdentity & {
   csrfToken: string;
   exp: number;
   iat: number;
   nonce: string;
-  username: string;
 };
 
 const encoder = new TextEncoder();
@@ -63,6 +72,54 @@ const signValue = async (value: string, secret: string) => {
 
 export const randomToken = () => toBase64Url(crypto.getRandomValues(new Uint8Array(32)));
 
+const toHex = (value: ArrayBuffer) =>
+  Array.from(new Uint8Array(value))
+    .map((chunk) => chunk.toString(16).padStart(2, "0"))
+    .join("");
+
+const fromHex = (value: string) =>
+  new Uint8Array(value.match(/.{1,2}/g)?.map((chunk) => Number.parseInt(chunk, 16)) ?? []);
+
+const derivePasswordBits = async (
+  password: string,
+  salt: string,
+  iterations: number,
+) => {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(password),
+    "PBKDF2",
+    false,
+    ["deriveBits"],
+  );
+
+  return crypto.subtle.deriveBits(
+    {
+      hash: "SHA-256",
+      iterations,
+      name: "PBKDF2",
+      salt: encoder.encode(salt),
+    },
+    key,
+    256,
+  );
+};
+
+export const normalizeUsername = (value: string) => value.trim().toLowerCase();
+
+export const hashPassword = async (password: string) => {
+  const normalizedPassword = String(password || "");
+  if (normalizedPassword.length < 12) {
+    throw new Error("Use a password with at least 12 characters.");
+  }
+
+  const iterations = 310000;
+  const salt = toHex(crypto.getRandomValues(new Uint8Array(16)));
+  const hash = await derivePasswordBits(normalizedPassword, salt, iterations);
+
+  return `pbkdf2_sha256$${iterations}$${salt}$${toHex(hash)}`;
+};
+
 export const verifyPassword = async (password: string, stored: string) => {
   if (!stored) {
     throw new Error("DASHBOARD_ADMIN_PASSWORD_HASH is not configured.");
@@ -75,28 +132,10 @@ export const verifyPassword = async (password: string, stored: string) => {
       throw new Error("DASHBOARD_ADMIN_PASSWORD_HASH format is invalid.");
     }
 
-    const key = await crypto.subtle.importKey(
-      "raw",
-      encoder.encode(password),
-      "PBKDF2",
-      false,
-      ["deriveBits"],
+    const candidate = new Uint8Array(
+      await derivePasswordBits(String(password || ""), salt, iterations),
     );
-    const derivedBits = await crypto.subtle.deriveBits(
-      {
-        hash: "SHA-256",
-        iterations,
-        name: "PBKDF2",
-        salt: encoder.encode(salt),
-      },
-      key,
-      256,
-    );
-
-    const candidate = new Uint8Array(derivedBits);
-    const expected = new Uint8Array(
-      hashHex.match(/.{1,2}/g)?.map((chunk) => Number.parseInt(chunk, 16)) ?? [],
-    );
+    const expected = fromHex(hashHex);
     return constantTimeEqual(candidate, expected);
   }
 
@@ -104,9 +143,7 @@ export const verifyPassword = async (password: string, stored: string) => {
     const [, hashHex] = stored.split("$");
     const digest = await crypto.subtle.digest("SHA-256", encoder.encode(password));
     const candidate = new Uint8Array(digest);
-    const expected = new Uint8Array(
-      hashHex.match(/.{1,2}/g)?.map((chunk) => Number.parseInt(chunk, 16)) ?? [],
-    );
+    const expected = fromHex(hashHex);
     return constantTimeEqual(candidate, expected);
   }
 
@@ -116,16 +153,20 @@ export const verifyPassword = async (password: string, stored: string) => {
 };
 
 export const createSessionToken = async (
-  username: string,
+  identity: SessionIdentity,
   csrfToken: string,
   secret: string,
 ) => {
   const payload: SessionPayload = {
+    accountId: identity.accountId || null,
     csrfToken,
+    displayName: identity.displayName || null,
     exp: Date.now() + ADMIN_SESSION_DURATION_MS,
     iat: Date.now(),
     nonce: randomToken(),
-    username,
+    partnerId: identity.partnerId || null,
+    role: identity.role,
+    username: identity.username,
   };
 
   const body = toBase64Url(encoder.encode(JSON.stringify(payload)));
@@ -140,7 +181,6 @@ export const createSessionToken = async (
 export const verifySessionToken = async (
   token: string,
   secret: string,
-  expectedUsername: string,
 ) => {
   if (!token) {
     return null;
@@ -167,10 +207,6 @@ export const verifySessionToken = async (
     ) as SessionPayload;
 
     if (payload.exp < Date.now()) {
-      return null;
-    }
-
-    if (payload.username !== expectedUsername) {
       return null;
     }
 

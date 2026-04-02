@@ -33,9 +33,13 @@ export async function POST(request: NextRequest) {
       );
     }
     const session = await invokeDashboardEdge<{
+      accountId?: string | null;
       authenticated: boolean;
       csrfToken: string;
+      displayName?: string | null;
       expiresAt: number;
+      partnerId?: string | null;
+      role: "admin" | "partner";
       sessionToken: string;
       username: string;
     }>("auth/login", {
@@ -47,7 +51,11 @@ export async function POST(request: NextRequest) {
     });
 
     const response = jsonSuccess({
+      accountId: session.accountId ?? null,
       authenticated: true,
+      displayName: session.displayName ?? null,
+      partnerId: session.partnerId ?? null,
+      role: session.role,
       username: session.username,
     });
 

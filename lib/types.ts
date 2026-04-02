@@ -12,6 +12,18 @@ export type RouteContext<T extends Record<string, string> = Record<string, strin
   params: Promise<T>;
 };
 
+export type DashboardRole = "admin" | "partner";
+
+export type DashboardSession = {
+  accountId?: string | null;
+  authenticated: boolean;
+  displayName?: string | null;
+  expiresAt: number;
+  partnerId?: string | null;
+  role: DashboardRole;
+  username: string;
+};
+
 export type DashboardActionName =
   | "cancel_ride"
   | "update_ride_follow_up"
@@ -28,7 +40,12 @@ export type DashboardActionName =
   | "update_service_type"
   | "create_service_type"
   | "update_cancel_reason"
-  | "create_cancel_reason";
+  | "create_cancel_reason"
+  | "create_admin"
+  | "create_partner_access"
+  | "reset_password"
+  | "send_support_reply"
+  | "mark_support_thread_seen";
 
 export type DashboardSectionName =
   | "overview"
@@ -40,4 +57,6 @@ export type DashboardSectionName =
   | "finance"
   | "partners"
   | "support"
-  | "settings";
+  | "settings"
+  | "access"
+  | "workspace";

@@ -6,11 +6,11 @@ export default function LoginPage() {
   return (
     <main className="auth-shell">
       <section className="auth-card">
-        <p className="eyebrow">Drop Admin Access</p>
-        <h1>Sign in to the control room</h1>
+        <p className="eyebrow">Drop access</p>
+        <h1>Sign in to your workspace</h1>
         <p className="auth-copy">
-          This dashboard can control live rides, dispatch settings, finance, and
-          partner operations. Use your admin credentials to continue.
+          Admins can operate the whole service here, and partners are routed into
+          their own scoped portal after sign in.
         </p>
         <LoginForm />
       </section>
