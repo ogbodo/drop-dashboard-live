@@ -28,6 +28,19 @@ type TableColumn<Row extends AnyRecord> = {
   render: (row: Row) => ReactNode;
 };
 
+type PromptField = {
+  defaultValue?: string;
+  label: string;
+  name: string;
+  options?: Array<{
+    label: string;
+    value: string;
+  }>;
+  placeholder?: string;
+  required?: boolean;
+  type?: "password" | "select" | "text" | "textarea";
+};
+
 type SectionDescriptor = {
   description: string;
   eyebrow: string;
@@ -214,6 +227,98 @@ const formatDate = (value: unknown) => {
   });
 };
 
+const DEFAULT_DASHBOARD_LOGO = "/drop-logo.png";
+
+const normalizeAssetUrl = (value: unknown, fallback = DEFAULT_DASHBOARD_LOGO) => {
+  const normalized = String(value || "").trim();
+  return normalized || fallback;
+};
+
+const getInitials = (value: unknown, fallback = "DR") => {
+  const cleaned = String(value || "")
+    .trim()
+    .replace(/[^a-z0-9\s]/gi, " ");
+
+  const parts = cleaned
+    .split(/\s+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  if (!parts.length) {
+    return fallback;
+  }
+
+  const initials = parts
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() || "")
+    .join("");
+
+  return initials || fallback;
+};
+
+const createInitialsLogoDataUrl = (value: unknown) => {
+  const initials = getInitials(value, "DP");
+  const svg = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+      <defs>
+        <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stop-color="#d16138" />
+          <stop offset="100%" stop-color="#8f351d" />
+        </linearGradient>
+      </defs>
+      <rect width="128" height="128" rx="36" fill="url(#g)" />
+      <text
+        x="64"
+        y="70"
+        text-anchor="middle"
+        font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
+        font-size="44"
+        font-weight="700"
+        letter-spacing="2"
+        fill="#fff7ef"
+      >
+        ${initials}
+      </text>
+    </svg>
+  `;
+
+  return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
+};
+
+const readImageFileAsDataUrl = (file: File) =>
+  new Promise<string>((resolve, reject) => {
+    if (!file.type.startsWith("image/")) {
+      reject(new Error("Choose an image file for the logo."));
+      return;
+    }
+
+    if (file.size > 1024 * 1024) {
+      reject(new Error("Logo files must be 1 MB or smaller."));
+      return;
+    }
+
+    const reader = new FileReader();
+
+    reader.onerror = () => {
+      reject(new Error("The logo file could not be read."));
+    };
+
+    reader.onload = () => {
+      resolve(String(reader.result || ""));
+    };
+
+    reader.readAsDataURL(file);
+  });
+
+const maskAccountNumber = (value: unknown) => {
+  const digits = String(value || "").replace(/\D/g, "");
+  if (!digits) {
+    return "No payout account";
+  }
+
+  return `Acct ••••${digits.slice(-4)}`;
+};
+
 const renderTone = (value: string) => {
   if (
     [
@@ -340,6 +445,63 @@ function MetricCard({
   );
 }
 
+function BrandingPreview({
+  alt,
+  src,
+  title,
+}: {
+  alt: string;
+  src: string;
+  title: string;
+}) {
+  return (
+    <div className="branding-preview-card">
+      <div className="branding-preview-frame">
+        <img
+          alt={alt}
+          className="branding-preview-image"
+          onError={(event) => {
+            event.currentTarget.src = DEFAULT_DASHBOARD_LOGO;
+          }}
+          src={src}
+        />
+      </div>
+      <div className="branding-preview-copy">
+        <strong>{title}</strong>
+      </div>
+    </div>
+  );
+}
+
+function PartnerIdentity({ partner }: { partner: AnyRecord }) {
+  const logoSrc = String(
+    partner?.metadata?.portal_logo_url || partner?.metadata?.portalLogoUrl || "",
+  ).trim();
+  const initials = getInitials(partner?.name || partner?.slug || "Partner", "DP");
+
+  return (
+    <div className="entity-with-mark">
+      <div className="entity-mark" aria-hidden="true">
+        <span>{initials}</span>
+        {logoSrc ? (
+          <img
+            alt=""
+            onError={(event) => {
+              event.currentTarget.style.display = "none";
+            }}
+            src={logoSrc}
+          />
+        ) : null}
+      </div>
+      <Stack
+        subtitle={partner.slug}
+        tertiary={partner.contact_email || partner.contact_phone || "No contact"}
+        title={partner.name}
+      />
+    </div>
+  );
+}
+
 function Subcard({
   actions,
   eyebrow,
@@ -419,10 +581,14 @@ function LoadingCard({ message }: { message: string }) {
 function DataTable<Row extends AnyRecord>({
   columns,
   emptyMessage,
+  isLoading,
+  loadingMessage,
   rows,
 }: {
   columns: TableColumn<Row>[];
   emptyMessage: string;
+  isLoading?: boolean;
+  loadingMessage?: string;
   rows: Row[];
 }) {
   if (!rows.length) {
@@ -430,7 +596,13 @@ function DataTable<Row extends AnyRecord>({
   }
 
   return (
-    <div className="table-shell">
+    <div aria-busy={isLoading ? "true" : "false"} className={`table-shell ${isLoading ? "is-loading" : ""}`}>
+      {isLoading ? (
+        <div className="table-loading-banner">
+          <span className="activity-dot table-loading-dot" />
+          {loadingMessage || "Refreshing rows..."}
+        </div>
+      ) : null}
       <table>
         <thead>
           <tr>
@@ -561,13 +733,32 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
     tone?: "danger" | "primary" | "success";
     title: string;
   } | null>(null);
+  const [promptState, setPromptState] = useState<{
+    confirmLabel?: string;
+    fields: PromptField[];
+    message: string;
+    tone?: "danger" | "primary" | "success";
+    title: string;
+  } | null>(null);
+  const [promptValues, setPromptValues] = useState<Record<string, string>>({});
+  const [supportComposer, setSupportComposer] = useState<"broadcast" | "reply" | null>(null);
   const [supportReplyBody, setSupportReplyBody] = useState("");
   const [supportReplyAudience, setSupportReplyAudience] = useState<"both" | "customer" | "driver">(
     "both",
   );
-  const [supportBroadcastAudience, setSupportBroadcastAudience] = useState<
-    "both" | "custom" | "customers" | "drivers"
-  >("both");
+  const [supportBroadcastDraft, setSupportBroadcastDraft] = useState<{
+    audience: "both" | "custom" | "customers" | "drivers";
+    body: string;
+    channelId: string;
+    recipientIds: string;
+    title: string;
+  }>({
+    audience: "both",
+    body: "",
+    channelId: "trip-alerts",
+    recipientIds: "",
+    title: "",
+  });
   const [selectedSupportRideId, setSelectedSupportRideId] = useState<string | null>(null);
   const [supportTypingLabel, setSupportTypingLabel] = useState("");
   const [supportUnreadByRide, setSupportUnreadByRide] = useState<Record<string, number>>({});
@@ -578,6 +769,7 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
   const loadingSectionsRef = useRef<Record<string, boolean>>({});
   const appliedFilterSignaturesRef = useRef<Partial<Record<SectionKey, string>>>({});
   const confirmResolverRef = useRef<((value: boolean) => void) | null>(null);
+  const promptResolverRef = useRef<((value: Record<string, string> | null) => void) | null>(null);
   const filterDebounceRef = useRef<number | null>(null);
   const panelStageRef = useRef<HTMLDivElement | null>(null);
   const supportSeenMessageRef = useRef<Record<string, number>>({});
@@ -586,7 +778,6 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
   const pendingSignalRefreshRef = useRef(false);
 
   const allowedSections = getAllowedSections(session?.role);
-  const activeDescriptor = sectionDescriptors[activeSection];
   const isActiveSectionLoading = Boolean(loadingSections[activeSection]);
   const pendingActionCount = Object.keys(pendingActions).length;
 
@@ -630,6 +821,30 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
     confirmResolverRef.current?.(value);
     confirmResolverRef.current = null;
     setConfirmState(null);
+  };
+
+  const requestPrompt = (options: {
+    confirmLabel?: string;
+    fields: PromptField[];
+    message: string;
+    tone?: "danger" | "primary" | "success";
+    title: string;
+  }) =>
+    new Promise<Record<string, string> | null>((resolve) => {
+      promptResolverRef.current = resolve;
+      setPromptValues(
+        Object.fromEntries(
+          options.fields.map((field) => [field.name, field.defaultValue || ""]),
+        ),
+      );
+      setPromptState(options);
+    });
+
+  const resolvePrompt = (value: Record<string, string> | null) => {
+    promptResolverRef.current?.(value);
+    promptResolverRef.current = null;
+    setPromptState(null);
+    setPromptValues({});
   };
 
   const runConfirmedAction = async <T,>(
@@ -738,19 +953,15 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
       return;
     }
 
-    const hasPreviousLoad = Boolean(loadedSectionsRef.current[section]);
-    const shouldShowLoader = !options.background || !hasPreviousLoad;
     const filterSignature = getSectionFilterSignature(section);
     const params = getSectionParams(section);
 
     const request = (async () => {
-      if (shouldShowLoader) {
-        setLoadingSections((current) => {
-          const next = { ...current, [section]: true };
-          loadingSectionsRef.current = next;
-          return next;
-        });
-      }
+      setLoadingSections((current) => {
+        const next = { ...current, [section]: true };
+        loadingSectionsRef.current = next;
+        return next;
+      });
 
       setSectionErrors((current) => ({ ...current, [section]: "" }));
 
@@ -774,13 +985,11 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
             error instanceof Error ? error.message : `Could not load ${section}.`,
         }));
       } finally {
-        if (shouldShowLoader) {
-          setLoadingSections((current) => {
-            const next = { ...current, [section]: false };
-            loadingSectionsRef.current = next;
-            return next;
-          });
-        }
+        setLoadingSections((current) => {
+          const next = { ...current, [section]: false };
+          loadingSectionsRef.current = next;
+          return next;
+        });
       }
     })();
 
@@ -1042,9 +1251,28 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
   }
 
   async function handleRideCancel(rideId: string) {
-    const reason =
-      window.prompt("Why are you cancelling this ride?", "Cancelled by Drop team") ||
-      "Cancelled by Drop team";
+    const promptResult = await requestPrompt({
+      confirmLabel: "Use this reason",
+      fields: [
+        {
+          defaultValue: "Cancelled by Drop team",
+          label: "Cancellation reason",
+          name: "reason",
+          placeholder: "Explain why the ride is being cancelled",
+          required: true,
+          type: "textarea",
+        },
+      ],
+      message: "Give the operations log a clear cancellation reason before ending the ride.",
+      title: "Cancellation reason",
+      tone: "danger",
+    });
+
+    if (!promptResult) {
+      return;
+    }
+
+    const reason = promptResult.reason?.trim() || "Cancelled by Drop team";
 
     await runConfirmedAction(
       `cancel-ride:${rideId}`,
@@ -1064,12 +1292,41 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
   }
 
   async function handleRideFollowUp(rideId: string, currentStatus: string, currentNote: string) {
-    const status =
-      window.prompt(
-        "Set follow-up status: none, customer_paying_soon, under_review, resolved",
-        currentStatus,
-      ) || currentStatus;
-    const note = window.prompt("Optional follow-up note", currentNote) || currentNote;
+    const promptResult = await requestPrompt({
+      confirmLabel: "Use follow-up details",
+      fields: [
+        {
+          defaultValue: currentStatus || "none",
+          label: "Follow-up status",
+          name: "status",
+          options: [
+            { label: "None", value: "none" },
+            { label: "Customer paying soon", value: "customer_paying_soon" },
+            { label: "Under review", value: "under_review" },
+            { label: "Resolved", value: "resolved" },
+          ],
+          required: true,
+          type: "select",
+        },
+        {
+          defaultValue: currentNote || "",
+          label: "Follow-up note",
+          name: "note",
+          placeholder: "Add context for the operations team",
+          type: "textarea",
+        },
+      ],
+      message: "Update the follow-up state and note that operations should see on this ride.",
+      title: "Payment follow-up details",
+      tone: "primary",
+    });
+
+    if (!promptResult) {
+      return;
+    }
+
+    const status = promptResult.status || currentStatus || "none";
+    const note = promptResult.note || "";
 
     await runConfirmedAction(
       `follow-up:${rideId}`,
@@ -1245,9 +1502,8 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
 
   async function submitNotification(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    const audience = String(form.get("audience") || "both");
-    const recipientIds = String(form.get("recipientIds") || "")
+    const audience = supportBroadcastDraft.audience;
+    const recipientIds = supportBroadcastDraft.recipientIds
       .split(",")
       .map((value) => value.trim())
       .filter(Boolean);
@@ -1275,13 +1531,19 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
       async () => {
         await adminAction("send_push_notification", {
           audience,
-          body: String(form.get("body") || ""),
-          channelId: String(form.get("channelId") || "trip-alerts"),
+          body: supportBroadcastDraft.body.trim(),
+          channelId: supportBroadcastDraft.channelId || "trip-alerts",
           recipientIds,
-          title: String(form.get("title") || ""),
+          title: supportBroadcastDraft.title.trim(),
         });
-        event.currentTarget.reset();
-        setSupportBroadcastAudience("both");
+        setSupportComposer(null);
+        setSupportBroadcastDraft({
+          audience: "both",
+          body: "",
+          channelId: "trip-alerts",
+          recipientIds: "",
+          title: "",
+        });
         notify("Notification sent", "Push notification has been queued.", "success");
       },
     );
@@ -1289,7 +1551,8 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
 
   async function submitPartner(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
     const name = String(form.get("name") || "");
 
     await runConfirmedAction(
@@ -1301,7 +1564,7 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
         tone: "success",
       },
       async () => {
-        await adminAction("create_partner", {
+        const partner = await adminAction("create_partner", {
           contact_email: String(form.get("contact_email") || ""),
           contact_name: String(form.get("contact_name") || ""),
           contact_phone: String(form.get("contact_phone") || ""),
@@ -1312,7 +1575,27 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
           payout_schedule: String(form.get("payout_schedule") || "monthly"),
           slug: String(form.get("slug") || ""),
         });
-        event.currentTarget.reset();
+        formElement.reset();
+        setSectionData((current) => {
+          const nextPartners = [partner, ...(((current.partners as AnyRecord[]) || []) as AnyRecord[])];
+          const currentAccess = (current.access as AnyRecord | null) || null;
+          const nextAccess = currentAccess
+            ? {
+                ...currentAccess,
+                partnerOptions: [partner, ...((currentAccess.partnerOptions as AnyRecord[]) || [])],
+                totals: {
+                  ...(currentAccess.totals || {}),
+                  totalPartners: Number(currentAccess.totals?.totalPartners || 0) + 1,
+                },
+              }
+            : current.access;
+
+          return {
+            ...current,
+            access: nextAccess,
+            partners: nextPartners,
+          };
+        });
         await refreshSections(["partners", "access"], { background: true });
         notify("Partner created", "The partner was added successfully.", "success");
       },
@@ -1321,7 +1604,8 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
 
   async function submitCreateAdmin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
     const username = String(form.get("username") || "");
 
     await runConfirmedAction(
@@ -1340,7 +1624,7 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
           username,
         });
 
-        event.currentTarget.reset();
+        formElement.reset();
         await refreshSections(["access"], { background: true });
         notify("Admin created", "A new admin can now sign in to operate Drop.", "success");
       },
@@ -1349,7 +1633,8 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
 
   async function submitCreatePartnerAccess(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
     const username = String(form.get("username") || "");
 
     await runConfirmedAction(
@@ -1369,7 +1654,7 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
           username,
         });
 
-        event.currentTarget.reset();
+        formElement.reset();
         await refreshSections(["access", "partners"], { background: true });
         notify(
           "Partner access created",
@@ -1382,7 +1667,8 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
 
   async function submitResetPassword(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
     const currentPassword = String(form.get("currentPassword") || "");
     const newPassword = String(form.get("newPassword") || "");
     const confirmPassword = String(form.get("confirmPassword") || "");
@@ -1406,7 +1692,7 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
           newPassword,
         });
 
-        event.currentTarget.reset();
+        formElement.reset();
         if (session?.role === "partner") {
           await refreshSections(["workspace"], { background: true });
         } else {
@@ -1529,9 +1815,59 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
     );
   }
 
+  async function submitWorkspaceBranding(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    const logoFile = form.get("logo_file");
+    const clearLogo = String(form.get("clear_logo") || "") === "true";
+    let logoUrl = String(form.get("logo_url") || "").trim();
+
+    if (logoFile instanceof File && logoFile.size > 0) {
+      try {
+        logoUrl = await readImageFileAsDataUrl(logoFile);
+      } catch (error) {
+        notify(
+          "Logo upload failed",
+          error instanceof Error ? error.message : "The logo could not be processed.",
+          "error",
+        );
+        return;
+      }
+    }
+
+    await runConfirmedAction(
+      "workspace-branding",
+      {
+        confirmLabel: clearLogo ? "Use default logo" : "Save logo",
+        message: clearLogo
+          ? "This will remove your custom partner logo and return your workspace to the default brand mark."
+          : "This will update your partner workspace logo anywhere your portal branding is shown.",
+        title: clearLogo ? "Remove your custom logo?" : "Save your workspace logo?",
+        tone: "primary",
+      },
+      async () => {
+        await adminAction("update_partner_branding", {
+          clearLogo,
+          logoUrl,
+        });
+        formElement.reset();
+        await refreshSections(["workspace"], { background: true });
+        notify(
+          "Workspace branding saved",
+          clearLogo
+            ? "Your workspace is back on the default Drop brand."
+            : "Your logo was updated successfully.",
+          "success",
+        );
+      },
+    );
+  }
+
   async function submitServiceTypeCreate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
 
     await runConfirmedAction(
       "create-service-type",
@@ -1549,7 +1885,7 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
           name: String(form.get("name") || "car"),
           sort_order: Number(form.get("sort_order") || 0),
         });
-        event.currentTarget.reset();
+        formElement.reset();
         await refreshSections(["settings"]);
         notify("Service created", "The service type was added.", "success");
       },
@@ -1558,7 +1894,8 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
 
   async function submitCancelReasonCreate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
 
     await runConfirmedAction(
       "create-cancel-reason",
@@ -1575,7 +1912,7 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
           role: String(form.get("role") || "customer"),
           value: String(form.get("value") || ""),
         });
-        event.currentTarget.reset();
+        formElement.reset();
         await refreshSections(["settings"]);
         notify("Reason created", "The cancel reason was added.", "success");
       },
@@ -1673,6 +2010,7 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
           title: "Support response from Drop",
         });
         setSupportReplyBody("");
+        setSupportComposer(null);
         await refreshSections(["support"], { background: true });
         notify("Support reply sent", "The response was delivered and logged.", "success");
       },
@@ -1680,11 +2018,23 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
   }
 
   async function handleAccountPasswordReset(accountId: string, username: string) {
-    const newPassword = window.prompt(
-      `Set a new temporary password for ${username}.`,
-      "",
-    );
+    const promptResult = await requestPrompt({
+      confirmLabel: "Use temporary password",
+      fields: [
+        {
+          label: "Temporary password",
+          name: "newPassword",
+          placeholder: `New temporary password for ${username}`,
+          required: true,
+          type: "password",
+        },
+      ],
+      message: "Set a temporary password that you can share securely with this operator.",
+      title: `Temporary password for ${username}`,
+      tone: "danger",
+    });
 
+    const newPassword = promptResult?.newPassword?.trim() || "";
     if (!newPassword) {
       return;
     }
@@ -1719,31 +2069,52 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
   const partners = (sectionData.partners as AnyRecord[]) || [];
   const support = sectionData.support as AnyRecord | null;
   const supportThreads = (support?.threads as AnyRecord[]) || [];
+  const supportConversationThreads = supportThreads.filter(
+    (thread) => Array.isArray(thread.transcript) && thread.transcript.length > 0,
+  );
   const access = sectionData.access as AnyRecord | null;
   const settings = sectionData.settings as AnyRecord | null;
   const workspace = sectionData.workspace as AnyRecord | null;
+  const workspacePartnerLogoOverride = String(
+    workspace?.partner?.metadata?.portal_logo_url ||
+      workspace?.partner?.metadata?.portalLogoUrl ||
+      "",
+  ).trim();
+  const partnerIdentityLabel =
+    workspace?.partner?.name || session?.displayName || session?.username || "Partner";
   const selectedSupportThread =
-    supportThreads.find((thread) => String(thread.ride_id) === selectedSupportRideId) ||
-    supportThreads[0] ||
+    supportConversationThreads.find((thread) => String(thread.ride_id) === selectedSupportRideId) ||
+    supportConversationThreads[0] ||
     null;
   const supportNavUnreadCount = activeSection === "support" ? 0 : supportUnreadTotal;
 
   const getAppConfigValue = (key: string) =>
     settings?.appConfigs?.find?.((item: AnyRecord) => item.key === key)?.value || {};
+  const adminLogoSrc = DEFAULT_DASHBOARD_LOGO;
+  const partnerInitialsLogoSrc = createInitialsLogoDataUrl(partnerIdentityLabel);
+  const partnerFallbackLogoSrc = partnerInitialsLogoSrc;
+  const partnerLogoSrc = normalizeAssetUrl(
+    workspacePartnerLogoOverride,
+    partnerFallbackLogoSrc,
+  );
+  const activeBrandLogoSrc = session?.role === "partner" ? partnerLogoSrc : adminLogoSrc;
+  const activeBrowserIconSrc = session?.role === "partner" ? partnerLogoSrc : adminLogoSrc;
+  const activeBrandFallbackSrc =
+    session?.role === "partner" ? partnerFallbackLogoSrc : DEFAULT_DASHBOARD_LOGO;
 
   useEffect(() => {
-    if (!supportThreads.length) {
+    if (!supportConversationThreads.length) {
       setSelectedSupportRideId(null);
       return;
     }
 
     if (
       !selectedSupportRideId ||
-      !supportThreads.some((thread) => String(thread.ride_id) === selectedSupportRideId)
+      !supportConversationThreads.some((thread) => String(thread.ride_id) === selectedSupportRideId)
     ) {
-      setSelectedSupportRideId(String(supportThreads[0].ride_id));
+      setSelectedSupportRideId(String(supportConversationThreads[0].ride_id));
     }
-  }, [selectedSupportRideId, supportThreads]);
+  }, [selectedSupportRideId, supportConversationThreads]);
 
   useEffect(() => {
     if (activeSection === "support") {
@@ -1780,6 +2151,28 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
       supportSeenMessageRef.current[rideId] = 0;
     });
   }, [activeSection, selectedSupportThread, session?.accountId]);
+
+  useEffect(() => {
+    if (typeof document === "undefined" || !activeBrowserIconSrc) {
+      return;
+    }
+
+    const applyLink = (rel: string) => {
+      let link = document.head.querySelector(`link[rel="${rel}"]`) as HTMLLinkElement | null;
+
+      if (!link) {
+        link = document.createElement("link");
+        link.rel = rel;
+        document.head.appendChild(link);
+      }
+
+      link.href = activeBrowserIconSrc;
+    };
+
+    applyLink("icon");
+    applyLink("shortcut icon");
+    applyLink("apple-touch-icon");
+  }, [activeBrowserIconSrc]);
 
   useEffect(() => {
     if (!session) {
@@ -2416,6 +2809,8 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
                   },
                 ]}
                 emptyMessage="No rides match the current filters."
+                isLoading={loadingSections.rides}
+                loadingMessage="Refreshing rides..."
                 rows={rides}
               />
             </Subcard>
@@ -2515,6 +2910,33 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
                     ),
                   },
                   {
+                    label: "Payouts",
+                    render: (driver) => {
+                      const latestPayout = driver.recent_payouts?.[0] || null;
+                      const payoutAccount = driver.default_payout_account || null;
+
+                      return (
+                        <Stack
+                          subtitle={
+                            payoutAccount
+                              ? `${payoutAccount.bank_name || payoutAccount.provider || "Payout account"} / ${maskAccountNumber(payoutAccount.account_number)}`
+                              : "No payout account configured"
+                          }
+                          tertiary={
+                            latestPayout
+                              ? `${formatCurrency(latestPayout.amount)} / ${latestPayout.status || "requested"} / ${formatDateTime(latestPayout.completed_at || latestPayout.requested_at)}`
+                              : "No payout requests yet"
+                          }
+                          title={
+                            payoutAccount?.account_name ||
+                            payoutAccount?.provider_email ||
+                            "Payout readiness not set"
+                          }
+                        />
+                      );
+                    },
+                  },
+                  {
                     label: "Actions",
                     render: (driver) => (
                       <div className="inline-actions">
@@ -2561,6 +2983,8 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
                   },
                 ]}
                 emptyMessage="No drivers match the current search."
+                isLoading={loadingSections.drivers}
+                loadingMessage="Refreshing drivers..."
                 rows={drivers}
               />
             </Subcard>
@@ -2625,10 +3049,21 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
                   {
                     label: "Signals",
                     render: (customer) => (
-                      <Stack
-                        subtitle={`${String(customer.total_trips || 0)} trips, rating ${String(customer.rating || "—")}`}
-                        title={customer.is_verified ? "Verified" : "Unverified"}
-                      />
+                      <div className="stack">
+                        <div className="tag-set">
+                          <Pill
+                            label={customer.is_verified ? "Verified" : "Unverified"}
+                            tone={customer.is_verified ? "success" : "danger"}
+                          />
+                          <Pill
+                            label={`${String(customer.total_trips || 0)} trips`}
+                            tone="neutral"
+                          />
+                        </div>
+                        <span className="muted">
+                          Rating {String(customer.rating || "—")}
+                        </span>
+                      </div>
                     ),
                   },
                   {
@@ -2667,6 +3102,8 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
                   },
                 ]}
                 emptyMessage="No customers match the current search."
+                isLoading={loadingSections.customers}
+                loadingMessage="Refreshing customers..."
                 rows={customers}
               />
             </Subcard>
@@ -2786,6 +3223,8 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
                   },
                 ]}
                 emptyMessage="No scheduled rides match the current filters."
+                isLoading={loadingSections["scheduled-rides"]}
+                loadingMessage="Refreshing scheduled rides..."
                 rows={scheduledRides}
               />
             </Subcard>
@@ -2833,7 +3272,7 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
             />
           </div>
 
-          <div className="subgrid">
+          <div className="finance-stack">
             <Subcard eyebrow="Collections" title="Recent customer payments">
               <DataTable
                 columns={[
@@ -2867,6 +3306,8 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
                   },
                 ]}
                 emptyMessage="There are no customer payments to display."
+                isLoading={loadingSections.finance}
+                loadingMessage="Refreshing customer payments..."
                 rows={finance.customerPayments || []}
               />
             </Subcard>
@@ -2903,7 +3344,50 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
                   },
                 ]}
                 emptyMessage="There are no driver wallets yet."
+                isLoading={loadingSections.finance}
+                loadingMessage="Refreshing driver wallets..."
                 rows={(finance.driverWallets || []).slice(0, 12)}
+              />
+            </Subcard>
+
+            <Subcard eyebrow="Payouts" title="Driver payouts">
+              <DataTable
+                columns={[
+                  {
+                    label: "Driver",
+                    render: (payout) => (
+                      <Stack
+                        subtitle={payout.driver?.phone || "No phone"}
+                        title={payout.driver?.full_name || "Unknown driver"}
+                      />
+                    ),
+                  },
+                  {
+                    label: "Amount",
+                    render: (payout) => (
+                      <Stack
+                        subtitle={payout.provider || "manual"}
+                        title={formatCurrency(payout.amount)}
+                      />
+                    ),
+                  },
+                  {
+                    label: "Status",
+                    render: (payout) => (
+                      <Pill label={payout.status || "pending"} tone={renderTone(payout.status || "")} />
+                    ),
+                  },
+                  {
+                    label: "Requested",
+                    render: (payout) => (
+                      <span>{formatDateTime(payout.completed_at || payout.requested_at)}</span>
+                    ),
+                  },
+                ]}
+                emptyMessage="There are no driver payouts yet."
+                isLoading={loadingSections.finance}
+                loadingMessage="Refreshing driver payouts..."
+                rows={(finance.driverPayouts || []).slice(0, 12)}
               />
             </Subcard>
 
@@ -2976,7 +3460,96 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
                   },
                 ]}
                 emptyMessage="There are no partner commissions yet."
+                isLoading={loadingSections.finance}
+                loadingMessage="Refreshing partner commissions..."
                 rows={(finance.partnerCommissions || []).slice(0, 12)}
+              />
+            </Subcard>
+
+            <Subcard eyebrow="Partner payouts" title="Recent partner payouts">
+              <DataTable
+                columns={[
+                  {
+                    label: "Partner",
+                    render: (payout) => (
+                      <Stack
+                        subtitle={`${formatDate(payout.period_start)} to ${formatDate(payout.period_end)}`}
+                        title={payout.partner?.name || "Unknown partner"}
+                      />
+                    ),
+                  },
+                  {
+                    label: "Net payout",
+                    render: (payout) => (
+                      <Stack
+                        subtitle={`Gross ${formatCurrency(payout.gross_commission_amount)}`}
+                        title={formatCurrency(payout.net_payout_amount)}
+                      />
+                    ),
+                  },
+                  {
+                    label: "Status",
+                    render: (payout) => (
+                      <Pill label={payout.status || "pending"} tone={renderTone(payout.status || "")} />
+                    ),
+                  },
+                  {
+                    label: "Paid",
+                    render: (payout) => <span>{formatDateTime(payout.paid_at || payout.created_at)}</span>,
+                  },
+                ]}
+                emptyMessage="There are no partner payouts yet."
+                isLoading={loadingSections.finance}
+                loadingMessage="Refreshing partner payouts..."
+                rows={(finance.partnerPayouts || []).slice(0, 12)}
+              />
+            </Subcard>
+
+            <Subcard eyebrow="Unit economics" title="Ride financials">
+              <DataTable
+                columns={[
+                  {
+                    label: "Ride",
+                    render: (entry) => (
+                      <Stack
+                        subtitle={entry.ride?.destination_address || "No destination"}
+                        tertiary={entry.ride_id}
+                        title={entry.ride?.pickup_address || "Unknown pickup"}
+                      />
+                    ),
+                  },
+                  {
+                    label: "Revenue",
+                    render: (entry) => (
+                      <Stack
+                        subtitle={`Service fee ${formatCurrency(entry.service_fee_amount)}`}
+                        title={formatCurrency(entry.customer_total_amount)}
+                      />
+                    ),
+                  },
+                  {
+                    label: "Driver payout",
+                    render: (entry) => (
+                      <Stack
+                        subtitle={`Gross ${formatCurrency(entry.driver_gross_amount)}`}
+                        title={formatCurrency(entry.driver_net_payout_amount)}
+                      />
+                    ),
+                  },
+                  {
+                    label: "Drop margin",
+                    render: (entry) => (
+                      <Pill
+                        label={formatCurrency(entry.drop_net_margin_amount)}
+                        tone={Number(entry.drop_net_margin_amount || 0) >= 0 ? "success" : "danger"}
+                      />
+                    ),
+                  },
+                ]}
+                emptyMessage="There are no ride financial rows yet."
+                isLoading={loadingSections.finance}
+                loadingMessage="Refreshing ride financials..."
+                rows={(finance.rideFinancials || []).slice(0, 12)}
               />
             </Subcard>
           </div>
@@ -3100,13 +3673,7 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
                 columns={[
                   {
                     label: "Partner",
-                    render: (partner) => (
-                      <Stack
-                        subtitle={partner.slug}
-                        tertiary={partner.contact_email || partner.contact_phone || "No contact"}
-                        title={partner.name}
-                      />
-                    ),
+                    render: (partner) => <PartnerIdentity partner={partner} />,
                   },
                   {
                     label: "Economics",
@@ -3178,6 +3745,8 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
                   },
                 ]}
                 emptyMessage="No partners match the current search."
+                isLoading={loadingSections.partners}
+                loadingMessage="Refreshing partners..."
                 rows={partners}
               />
             </Subcard>
@@ -3188,7 +3757,19 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
   );
 
   const renderSupportSection = () => (
-    <PanelShell descriptor={sectionDescriptors.support} lastRefresh={lastRefresh.support}>
+    <PanelShell
+      actions={
+        <button
+          className="primary-button"
+          onClick={() => setSupportComposer("broadcast")}
+          type="button"
+        >
+          Send push notification
+        </button>
+      }
+      descriptor={sectionDescriptors.support}
+      lastRefresh={lastRefresh.support}
+    >
       {sectionErrors.support ? (
         <ErrorState message={sectionErrors.support} title="Support unavailable" />
       ) : loadingSections.support && !support ? (
@@ -3205,8 +3786,8 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
             />
             <MetricCard
               label="Live threads"
-              note="Active support conversations"
-              value={formatNumber(support.counts?.activeThreads)}
+              note="Threads that already have conversation activity"
+              value={formatNumber(supportConversationThreads.length)}
             />
             <MetricCard
               label="New messages"
@@ -3220,302 +3801,7 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
             />
           </div>
 
-          <div className="support-layout">
-            <Subcard eyebrow="Inbox" title="Conversation threads">
-              <div className="toolbar support-search-toolbar">
-                <label>
-                  Search inbox
-                  <input
-                    onChange={(event) =>
-                      setFilters((current) => ({
-                        ...current,
-                        supportSearch: event.target.value,
-                      }))
-                    }
-                    placeholder="Ride, customer, driver, report, message"
-                    value={filters.supportSearch}
-                  />
-                </label>
-                <div className="support-helper-card">
-                  <Pill label="Auto applies" tone="success" />
-                  <p>Filters update as you type and keep the inbox focused.</p>
-                </div>
-              </div>
-
-              <div className="support-thread-list">
-                {supportThreads.length ? (
-                  supportThreads.map((thread: AnyRecord) => {
-                    const rideId = String(thread.ride_id);
-                    const unreadCount = Number(
-                      supportUnreadByRide[rideId] || thread.unread_messages || 0,
-                    );
-                    const isSelected = selectedSupportThread?.ride_id === thread.ride_id;
-
-                    return (
-                      <button
-                        className={`support-thread-card ${isSelected ? "active" : ""}`}
-                        key={rideId}
-                        onClick={() => setSelectedSupportRideId(rideId)}
-                        type="button"
-                      >
-                        <div className="support-thread-head">
-                          <strong>
-                            {(thread.customer?.full_name || "Customer") +
-                              " / " +
-                              (thread.driver?.full_name || "Driver")}
-                          </strong>
-                          {unreadCount > 0 ? (
-                            <span className="thread-unread-badge">{unreadCount}</span>
-                          ) : (
-                            <span className="thread-time">{formatDateTime(thread.last_activity_at)}</span>
-                          )}
-                        </div>
-                        <div className="support-thread-route">
-                          <span>{thread.ride?.pickup_address || "Unknown pickup"}</span>
-                          <span>{thread.ride?.destination_address || "Unknown dropoff"}</span>
-                        </div>
-                        <div className="tag-set">
-                          <Pill
-                            label={thread.hasOpenReport ? "Open report" : "Conversation"}
-                            tone={thread.hasOpenReport ? "warning" : "success"}
-                          />
-                          <Pill
-                            label={thread.ride?.status || "unknown"}
-                            tone={renderTone(thread.ride?.status || "")}
-                          />
-                        </div>
-                        <p className="thread-preview">
-                          {thread.last_message?.content ||
-                            thread.responses?.[Math.max(Number(thread.responses?.length || 1) - 1, 0)]
-                              ?.body ||
-                            "No messages yet"}
-                        </p>
-                      </button>
-                    );
-                  })
-                ) : (
-                  <EmptyState
-                    message="No support conversations match the current filter."
-                    title="Inbox is clear"
-                  />
-                )}
-              </div>
-            </Subcard>
-
-            <Subcard
-              eyebrow="Selected thread"
-              title={
-                selectedSupportThread?.ride_id
-                  ? `Ride ${selectedSupportThread.ride_id}`
-                  : "Choose a conversation"
-              }
-            >
-              {!selectedSupportThread ? (
-                <EmptyState
-                  message="Choose a conversation from the inbox to inspect the transcript, reports, and quick actions."
-                  title="No conversation selected"
-                />
-              ) : (
-                <>
-                  <div className="support-thread-summary">
-                    <div className="support-summary-card">
-                      <span>Customer</span>
-                      <strong>{selectedSupportThread.customer?.full_name || "Unknown customer"}</strong>
-                      <small>{selectedSupportThread.customer?.phone || "No phone"}</small>
-                    </div>
-                    <div className="support-summary-card">
-                      <span>Driver</span>
-                      <strong>{selectedSupportThread.driver?.full_name || "Unknown driver"}</strong>
-                      <small>{selectedSupportThread.driver?.phone || "No phone"}</small>
-                    </div>
-                    <div className="support-summary-card">
-                      <span>Ride route</span>
-                      <strong>{selectedSupportThread.ride?.pickup_address || "Unknown pickup"}</strong>
-                      <small>{selectedSupportThread.ride?.destination_address || "Unknown dropoff"}</small>
-                    </div>
-                  </div>
-
-                  <div className="tag-set">
-                    <Pill
-                      label={selectedSupportThread.ride?.status || "unknown"}
-                      tone={renderTone(selectedSupportThread.ride?.status || "")}
-                    />
-                    <Pill
-                      label={
-                        selectedSupportThread.hasOpenReport
-                          ? `${String(selectedSupportThread.reports?.length || 0)} open reports`
-                          : "No open report"
-                      }
-                      tone={selectedSupportThread.hasOpenReport ? "warning" : "success"}
-                    />
-                    <Pill
-                      label={`${String(selectedSupportThread.transcript?.length || 0)} timeline entries`}
-                      tone="neutral"
-                    />
-                  </div>
-
-                  {supportTypingLabel ? (
-                    <div className="typing-banner">{supportTypingLabel}</div>
-                  ) : null}
-
-                  <div className="support-transcript">
-                    {(selectedSupportThread.transcript || []).length ? (
-                      (selectedSupportThread.transcript || []).map((entry: AnyRecord, index: number) => (
-                        <div
-                          className={`support-entry ${
-                            entry.entry_type === "response"
-                              ? "agent"
-                              : entry.sender?.role === "driver"
-                                ? "driver"
-                                : "customer"
-                          }`}
-                          key={`${entry.entry_type}-${String(entry.id || index)}`}
-                        >
-                          <div className="support-entry-head">
-                            <strong>
-                              {entry.entry_type === "response"
-                                ? entry.created_by_username || "Drop support"
-                                : entry.sender?.full_name || "Participant"}
-                            </strong>
-                            <span>{formatDateTime(entry.created_at)}</span>
-                          </div>
-                          <p>{entry.body || entry.content || "[image message]"}</p>
-                          {entry.image_url ? (
-                            <a
-                              className="support-image-link"
-                              href={entry.image_url}
-                              rel="noreferrer"
-                              target="_blank"
-                            >
-                              View image attachment
-                            </a>
-                          ) : null}
-                        </div>
-                      ))
-                    ) : (
-                      <EmptyState
-                        message="There are no conversation entries on this ride yet."
-                        title="No transcript"
-                      />
-                    )}
-                  </div>
-                </>
-              )}
-            </Subcard>
-
-            <div className="support-actions-stack">
-              <form className="subcard" onSubmit={(event) => void submitSupportReply(event)}>
-                <div className="subcard-header">
-                  <div>
-                    <span>Reply</span>
-                    <h4>Send support response</h4>
-                  </div>
-                  <button
-                    className="primary-button"
-                    disabled={
-                      !selectedSupportThread?.ride_id ||
-                      isActionPending(`support-reply:${String(selectedSupportThread?.ride_id || "")}`)
-                    }
-                    type="submit"
-                  >
-                    {isActionPending(`support-reply:${String(selectedSupportThread?.ride_id || "")}`)
-                      ? "Sending..."
-                      : "Send response"}
-                  </button>
-                </div>
-                <div className="form-grid">
-                  <label>
-                    Audience
-                    <select
-                      onChange={(event) =>
-                        setSupportReplyAudience(
-                          event.target.value as "both" | "customer" | "driver",
-                        )
-                      }
-                      value={supportReplyAudience}
-                    >
-                      <option value="both">Customer and driver</option>
-                      <option value="customer">Customer only</option>
-                      <option value="driver">Driver only</option>
-                    </select>
-                  </label>
-                  <label className="support-full-span">
-                    Message
-                    <textarea
-                      onChange={(event) => setSupportReplyBody(event.target.value)}
-                      placeholder={
-                        selectedSupportThread?.ride_id
-                          ? "Write a clear support response for this conversation..."
-                          : "Select a support conversation first"
-                      }
-                      value={supportReplyBody}
-                    />
-                  </label>
-                </div>
-                <p className="support-card-note">
-                  Responses are logged in the support timeline and delivered to the selected ride participants.
-                </p>
-              </form>
-
-              <form className="subcard" onSubmit={(event) => void submitNotification(event)}>
-                <div className="subcard-header">
-                  <div>
-                    <span>Broadcast</span>
-                    <h4>Send push notification</h4>
-                  </div>
-                  <button
-                    className="primary-button"
-                    disabled={isActionPending("send-notification")}
-                    type="submit"
-                  >
-                    {isActionPending("send-notification") ? "Sending..." : "Send notification"}
-                  </button>
-                </div>
-                <div className="form-grid">
-                  <label>
-                    Audience
-                    <select
-                      name="audience"
-                      onChange={(event) =>
-                        setSupportBroadcastAudience(
-                          event.target.value as "both" | "custom" | "customers" | "drivers",
-                        )
-                      }
-                      value={supportBroadcastAudience}
-                    >
-                      <option value="both">Drivers and customers</option>
-                      <option value="drivers">Drivers only</option>
-                      <option value="customers">Customers only</option>
-                      <option value="custom">Custom recipient IDs</option>
-                    </select>
-                  </label>
-                  {supportBroadcastAudience === "custom" ? (
-                    <label className="support-full-span">
-                      Recipient IDs
-                      <textarea name="recipientIds" placeholder="Paste comma-separated profile UUIDs" />
-                    </label>
-                  ) : null}
-                  <label>
-                    Title
-                    <input name="title" required />
-                  </label>
-                  <label className="support-full-span">
-                    Body
-                    <textarea name="body" required />
-                  </label>
-                  <label>
-                    Channel ID
-                    <input defaultValue="trip-alerts" name="channelId" />
-                  </label>
-                </div>
-                <p className="support-card-note">
-                  Choose a whole audience or a custom recipient list when you need targeted field updates.
-                </p>
-              </form>
-            </div>
-          </div>
-
-          <div className="subgrid support-secondary-grid">
+          <div className="support-ops-grid">
             <Subcard eyebrow="Issue queue" title="Reports waiting on action">
               <DataTable
                 columns={[
@@ -3581,6 +3867,8 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
                   },
                 ]}
                 emptyMessage="There are no support reports right now."
+                isLoading={loadingSections.support}
+                loadingMessage="Refreshing reports..."
                 rows={support.reports || []}
               />
             </Subcard>
@@ -3618,9 +3906,216 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
                   },
                 ]}
                 emptyMessage="No low-rating reviews need attention right now."
+                isLoading={loadingSections.support}
+                loadingMessage="Refreshing reviews..."
                 rows={(support.reviews || []).filter((review: AnyRecord) => Number(review.rating || 0) <= 3)}
               />
             </Subcard>
+          </div>
+
+          <div className="support-desk">
+            <Subcard eyebrow="Inbox" title={`Conversation inbox (${formatNumber(supportConversationThreads.length)})`}>
+              <div className="toolbar support-search-toolbar">
+                <label>
+                  Search inbox
+                  <input
+                    onChange={(event) =>
+                      setFilters((current) => ({
+                        ...current,
+                        supportSearch: event.target.value,
+                      }))
+                    }
+                    placeholder="Ride, customer, driver, report, message"
+                    value={filters.supportSearch}
+                  />
+                </label>
+                <div className="support-helper-card">
+                  <Pill
+                    label={loadingSections.support ? "Refreshing..." : "Conversation only"}
+                    tone={loadingSections.support ? "warning" : "success"}
+                  />
+                  <p>
+                    Only rides with actual conversation activity appear here. Use the Broadcast
+                    button to reach wider audiences without leaving the desk.
+                  </p>
+                </div>
+              </div>
+
+              <div className="support-thread-list">
+                {loadingSections.support && !supportConversationThreads.length ? (
+                  <LoadingCard message="Refreshing inbox..." />
+                ) : supportConversationThreads.length ? (
+                  supportConversationThreads.map((thread: AnyRecord) => {
+                    const rideId = String(thread.ride_id);
+                    const unreadCount = Number(
+                      supportUnreadByRide[rideId] || thread.unread_messages || 0,
+                    );
+                    const isSelected = selectedSupportThread?.ride_id === thread.ride_id;
+                    const latestTranscriptEntry =
+                      thread.transcript?.[Math.max(Number(thread.transcript?.length || 1) - 1, 0)] || null;
+
+                    return (
+                      <button
+                        className={`support-thread-card ${isSelected ? "active" : ""}`}
+                        key={rideId}
+                        onClick={() => setSelectedSupportRideId(rideId)}
+                        type="button"
+                      >
+                        <div className="support-thread-head">
+                          <strong>
+                            {(thread.customer?.full_name || "Customer") +
+                              " / " +
+                              (thread.driver?.full_name || "Driver")}
+                          </strong>
+                          {unreadCount > 0 ? (
+                            <span className="thread-unread-badge">{unreadCount}</span>
+                          ) : (
+                            <span className="thread-time">{formatDateTime(thread.last_activity_at)}</span>
+                          )}
+                        </div>
+                        <div className="support-thread-route">
+                          <span>{thread.ride?.pickup_address || "Unknown pickup"}</span>
+                          <span>{thread.ride?.destination_address || "Unknown dropoff"}</span>
+                        </div>
+                        <div className="tag-set">
+                          <Pill
+                            label={thread.hasOpenReport ? "Open report" : "Conversation"}
+                            tone={thread.hasOpenReport ? "warning" : "success"}
+                          />
+                          <Pill
+                            label={thread.ride?.status || "unknown"}
+                            tone={renderTone(thread.ride?.status || "")}
+                          />
+                        </div>
+                        <p className="thread-preview">
+                          {latestTranscriptEntry?.body ||
+                            latestTranscriptEntry?.content ||
+                            "No conversation preview yet"}
+                        </p>
+                      </button>
+                    );
+                  })
+                ) : (
+                  <EmptyState
+                    message="No support conversations match the current filter."
+                    title="Inbox is clear"
+                  />
+                )}
+              </div>
+            </Subcard>
+
+            <div className="support-thread-workspace">
+              <Subcard
+                actions={
+                  <button
+                    className="primary-button"
+                    disabled={!selectedSupportThread?.ride_id}
+                    onClick={() => setSupportComposer("reply")}
+                    type="button"
+                  >
+                    {selectedSupportThread?.ride_id ? "Send response" : "Select a thread"}
+                  </button>
+                }
+                eyebrow="Selected thread"
+                title={
+                  selectedSupportThread?.ride_id
+                    ? `Ride ${selectedSupportThread.ride_id}`
+                    : "Choose a conversation"
+                }
+              >
+                {!selectedSupportThread ? (
+                  <EmptyState
+                    message="Choose a conversation from the inbox to inspect the transcript, reports, and context."
+                    title="No conversation selected"
+                  />
+                ) : (
+                  <>
+                    <div className="support-thread-summary">
+                      <div className="support-summary-card">
+                        <span>Customer</span>
+                        <strong>{selectedSupportThread.customer?.full_name || "Unknown customer"}</strong>
+                        <small>{selectedSupportThread.customer?.phone || "No phone"}</small>
+                      </div>
+                      <div className="support-summary-card">
+                        <span>Driver</span>
+                        <strong>{selectedSupportThread.driver?.full_name || "Unknown driver"}</strong>
+                        <small>{selectedSupportThread.driver?.phone || "No phone"}</small>
+                      </div>
+                      <div className="support-summary-card">
+                        <span>Ride route</span>
+                        <strong>{selectedSupportThread.ride?.pickup_address || "Unknown pickup"}</strong>
+                        <small>{selectedSupportThread.ride?.destination_address || "Unknown dropoff"}</small>
+                      </div>
+                    </div>
+
+                    <div className="tag-set">
+                      <Pill
+                        label={selectedSupportThread.ride?.status || "unknown"}
+                        tone={renderTone(selectedSupportThread.ride?.status || "")}
+                      />
+                      <Pill
+                        label={
+                          selectedSupportThread.hasOpenReport
+                            ? `${String(selectedSupportThread.reports?.length || 0)} open reports`
+                            : "No open report"
+                        }
+                        tone={selectedSupportThread.hasOpenReport ? "warning" : "success"}
+                      />
+                      <Pill
+                        label={`${String(selectedSupportThread.transcript?.length || 0)} timeline entries`}
+                        tone="neutral"
+                      />
+                    </div>
+
+                    {supportTypingLabel ? (
+                      <div className="typing-banner">{supportTypingLabel}</div>
+                    ) : null}
+
+                    <div className="support-transcript">
+                      {(selectedSupportThread.transcript || []).length ? (
+                        (selectedSupportThread.transcript || []).map((entry: AnyRecord, index: number) => (
+                          <div
+                            className={`support-entry ${
+                              entry.entry_type === "response"
+                                ? "agent"
+                                : entry.sender?.role === "driver"
+                                  ? "driver"
+                                  : "customer"
+                            }`}
+                            key={`${entry.entry_type}-${String(entry.id || index)}`}
+                          >
+                            <div className="support-entry-head">
+                              <strong>
+                                {entry.entry_type === "response"
+                                  ? entry.created_by_username || "Drop support"
+                                  : entry.sender?.full_name || "Participant"}
+                              </strong>
+                              <span>{formatDateTime(entry.created_at)}</span>
+                            </div>
+                            <p>{entry.body || entry.content || "[image message]"}</p>
+                            {entry.image_url ? (
+                              <a
+                                className="support-image-link"
+                                href={entry.image_url}
+                                rel="noreferrer"
+                                target="_blank"
+                              >
+                                View image attachment
+                              </a>
+                            ) : null}
+                          </div>
+                        ))
+                      ) : (
+                        <EmptyState
+                          message="There are no conversation entries on this ride yet."
+                          title="No transcript"
+                        />
+                      )}
+                    </div>
+                  </>
+                )}
+              </Subcard>
+            </div>
           </div>
         </>
       )}
@@ -3712,6 +4207,19 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
                   type="submit"
                 >
                   {isActionPending("create-partner-access") ? "Enabling..." : "Enable partner"}
+                </button>
+              </div>
+              <div className="support-helper-card access-helper-card">
+                <p>
+                  Partner choices in this dropdown come from the Partners page. Create a partner first,
+                  and new ones appear here automatically.
+                </p>
+                <button
+                  className="ghost-button"
+                  onClick={() => handleSectionSelect("partners")}
+                  type="button"
+                >
+                  Open partner management
                 </button>
               </div>
               <div className="form-grid">
@@ -3813,10 +4321,12 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
                     </div>
                   ),
                 },
-              ]}
-              emptyMessage="No dashboard accounts exist yet."
-              rows={access.accounts || []}
-            />
+                ]}
+                emptyMessage="No dashboard accounts exist yet."
+                isLoading={loadingSections.access}
+                loadingMessage="Refreshing access inventory..."
+                rows={access.accounts || []}
+              />
           </Subcard>
         </>
       )}
@@ -4335,6 +4845,54 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
               </div>
             </Subcard>
 
+            <form className="subcard" onSubmit={(event) => void submitWorkspaceBranding(event)}>
+              <div className="subcard-header">
+                <div>
+                  <span>Branding</span>
+                  <h4>Your workspace logo</h4>
+                </div>
+                <button
+                  className="primary-button"
+                  disabled={isActionPending("workspace-branding")}
+                  type="submit"
+                >
+                  {isActionPending("workspace-branding") ? "Saving..." : "Save logo"}
+                </button>
+              </div>
+              <div className="form-grid">
+                <label className="support-full-span">
+                  Upload logo
+                  <input accept="image/*" name="logo_file" type="file" />
+                </label>
+                <label className="support-full-span">
+                  Or use an image URL
+                  <input
+                    defaultValue={workspacePartnerLogoOverride}
+                    name="logo_url"
+                    placeholder="https://... or /your-logo.png"
+                  />
+                </label>
+                <label>
+                  Reset to default
+                  <select defaultValue="false" name="clear_logo">
+                    <option value="false">Keep custom logo</option>
+                    <option value="true">Use default Drop logo</option>
+                  </select>
+                </label>
+              </div>
+              <p className="support-card-note">
+                Upload a square image up to 1 MB. Your saved logo appears in your sidebar and tab
+                icon while you are signed in.
+              </p>
+              <div className="branding-preview-grid">
+                <BrandingPreview
+                  alt="Current partner workspace logo"
+                  src={partnerLogoSrc}
+                  title="Current workspace logo"
+                />
+              </div>
+            </form>
+
             <PasswordResetCard
               heading="Reset your portal password"
               isDisabled={isActionPending("reset-own-password")}
@@ -4540,7 +5098,14 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
           <div className="sidebar-scroll">
             <div className="brand-block">
               <div className="brand-mark">
-                <img alt="Drop" className="brand-logo" src="/drop-logo.png" />
+                <img
+                  alt={session?.role === "partner" ? "Partner workspace logo" : "Drop control logo"}
+                  className="brand-logo"
+                  onError={(event) => {
+                    event.currentTarget.src = activeBrandFallbackSrc;
+                  }}
+                  src={activeBrandLogoSrc}
+                />
                 <div>
                   <p className="eyebrow">{session?.role === "partner" ? "Partner portal" : "Drop control"}</p>
                   <h1>{session?.role === "partner" ? "Partner Workspace" : "Operations Dashboard"}</h1>
@@ -4615,23 +5180,6 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
         </aside>
 
         <main className="main">
-          <section className="hero-banner">
-            <div className="hero-copy">
-              <p className="eyebrow">{activeDescriptor.eyebrow}</p>
-              <h2>{activeDescriptor.title}</h2>
-              <p>{activeDescriptor.description}</p>
-              <div className="hero-inline">
-                <Pill
-                  label={session?.role === "partner" ? "Partner workspace" : "Operator session active"}
-                  tone="success"
-                />
-                {lastRefresh[activeSection] ? (
-                  <span className="hero-timestamp">Last synced {lastRefresh[activeSection]}</span>
-                ) : null}
-              </div>
-            </div>
-          </section>
-
           <div className="panel-stage" key={activeSection} ref={panelStageRef}>
             {renderActiveSection()}
           </div>
@@ -4670,6 +5218,284 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
               </button>
             </div>
           </div>
+        </div>
+      ) : null}
+
+      {promptState ? (
+        <div className="confirm-backdrop" role="presentation">
+          <form
+            className="confirm-dialog prompt-dialog"
+            onSubmit={(event) => {
+              event.preventDefault();
+              resolvePrompt(promptValues);
+            }}
+          >
+            <p className="eyebrow">Complete action</p>
+            <h3>{promptState.title}</h3>
+            <p className="confirm-copy">{promptState.message}</p>
+            <div className="prompt-fields">
+              {promptState.fields.map((field, index) => {
+                const type = field.type || "text";
+
+                return (
+                  <label className="prompt-field" key={field.name}>
+                    {field.label}
+                    {type === "textarea" ? (
+                      <textarea
+                        autoFocus={index === 0}
+                        onChange={(event) =>
+                          setPromptValues((current) => ({
+                            ...current,
+                            [field.name]: event.target.value,
+                          }))
+                        }
+                        placeholder={field.placeholder}
+                        required={field.required}
+                        value={promptValues[field.name] || ""}
+                      />
+                    ) : type === "select" ? (
+                      <select
+                        autoFocus={index === 0}
+                        onChange={(event) =>
+                          setPromptValues((current) => ({
+                            ...current,
+                            [field.name]: event.target.value,
+                          }))
+                        }
+                        required={field.required}
+                        value={promptValues[field.name] || ""}
+                      >
+                        {(field.options || []).map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input
+                        autoFocus={index === 0}
+                        onChange={(event) =>
+                          setPromptValues((current) => ({
+                            ...current,
+                            [field.name]: event.target.value,
+                          }))
+                        }
+                        placeholder={field.placeholder}
+                        required={field.required}
+                        type={type}
+                        value={promptValues[field.name] || ""}
+                      />
+                    )}
+                  </label>
+                );
+              })}
+            </div>
+            <div className="confirm-actions">
+              <button className="ghost-button" onClick={() => resolvePrompt(null)} type="button">
+                Cancel
+              </button>
+              <button
+                className={
+                  promptState.tone === "danger"
+                    ? "danger-button"
+                    : promptState.tone === "success"
+                      ? "success-button"
+                      : "primary-button"
+                }
+                type="submit"
+              >
+                {promptState.confirmLabel || "Continue"}
+              </button>
+            </div>
+          </form>
+        </div>
+      ) : null}
+
+      {supportComposer === "broadcast" ? (
+        <div className="confirm-backdrop" role="presentation">
+          <form className="confirm-dialog support-compose-dialog" onSubmit={(event) => void submitNotification(event)}>
+            <div className="support-compose-head">
+              <div>
+                <p className="eyebrow">Broadcast</p>
+                <h3>Send push notification</h3>
+                <p className="confirm-copy">
+                  Reach drivers, customers, or a custom list from one focused action.
+                </p>
+              </div>
+              <button className="ghost-button" onClick={() => setSupportComposer(null)} type="button">
+                Close
+              </button>
+            </div>
+            <div className="form-grid support-compose-grid">
+              <label>
+                Audience
+                <select
+                  onChange={(event) =>
+                    setSupportBroadcastDraft((current) => ({
+                      ...current,
+                      audience: event.target.value as "both" | "custom" | "customers" | "drivers",
+                    }))
+                  }
+                  value={supportBroadcastDraft.audience}
+                >
+                  <option value="both">Drivers and customers</option>
+                  <option value="drivers">Drivers only</option>
+                  <option value="customers">Customers only</option>
+                  <option value="custom">Custom recipient IDs</option>
+                </select>
+              </label>
+              <label>
+                Title
+                <input
+                  onChange={(event) =>
+                    setSupportBroadcastDraft((current) => ({
+                      ...current,
+                      title: event.target.value,
+                    }))
+                  }
+                  required
+                  value={supportBroadcastDraft.title}
+                />
+              </label>
+              {supportBroadcastDraft.audience === "custom" ? (
+                <label className="support-full-span">
+                  Recipient IDs
+                  <textarea
+                    onChange={(event) =>
+                      setSupportBroadcastDraft((current) => ({
+                        ...current,
+                        recipientIds: event.target.value,
+                      }))
+                    }
+                    placeholder="Paste comma-separated profile UUIDs"
+                    value={supportBroadcastDraft.recipientIds}
+                  />
+                </label>
+              ) : null}
+              <label className="support-full-span">
+                Body
+                <textarea
+                  onChange={(event) =>
+                    setSupportBroadcastDraft((current) => ({
+                      ...current,
+                      body: event.target.value,
+                    }))
+                  }
+                  required
+                  value={supportBroadcastDraft.body}
+                />
+              </label>
+              <label>
+                Channel ID
+                <input
+                  onChange={(event) =>
+                    setSupportBroadcastDraft((current) => ({
+                      ...current,
+                      channelId: event.target.value,
+                    }))
+                  }
+                  value={supportBroadcastDraft.channelId}
+                />
+              </label>
+            </div>
+            <p className="support-card-note">
+              Send to drivers only, customers only, both audiences, or a custom list when you need precision.
+            </p>
+            <div className="confirm-actions">
+              <button className="ghost-button" onClick={() => setSupportComposer(null)} type="button">
+                Cancel
+              </button>
+              <button
+                className="primary-button"
+                disabled={isActionPending("send-notification")}
+                type="submit"
+              >
+                {isActionPending("send-notification") ? "Sending..." : "Send notification"}
+              </button>
+            </div>
+          </form>
+        </div>
+      ) : null}
+
+      {supportComposer === "reply" ? (
+        <div className="confirm-backdrop" role="presentation">
+          <form className="confirm-dialog support-compose-dialog" onSubmit={(event) => void submitSupportReply(event)}>
+            <div className="support-compose-head">
+              <div>
+                <p className="eyebrow">Support response</p>
+                <h3>Reply to selected thread</h3>
+                <p className="confirm-copy">
+                  Send a clear response to the active ride conversation and log it in the timeline.
+                </p>
+              </div>
+              <button className="ghost-button" onClick={() => setSupportComposer(null)} type="button">
+                Close
+              </button>
+            </div>
+            {selectedSupportThread ? (
+              <div className="support-compose-context">
+                <Pill label={`Ride ${selectedSupportThread.ride_id}`} tone="neutral" />
+                <Pill
+                  label={selectedSupportThread.customer?.full_name || "Unknown customer"}
+                  tone="success"
+                />
+                <Pill
+                  label={selectedSupportThread.driver?.full_name || "Unknown driver"}
+                  tone="neutral"
+                />
+              </div>
+            ) : null}
+            <div className="form-grid support-compose-grid">
+              <label>
+                Audience
+                <select
+                  onChange={(event) =>
+                    setSupportReplyAudience(
+                      event.target.value as "both" | "customer" | "driver",
+                    )
+                  }
+                  value={supportReplyAudience}
+                >
+                  <option value="both">Customer and driver</option>
+                  <option value="customer">Customer only</option>
+                  <option value="driver">Driver only</option>
+                </select>
+              </label>
+              <label className="support-full-span">
+                Message
+                <textarea
+                  onChange={(event) => setSupportReplyBody(event.target.value)}
+                  placeholder={
+                    selectedSupportThread?.ride_id
+                      ? "Write a clear support response for this conversation..."
+                      : "Select a support conversation first"
+                  }
+                  required
+                  value={supportReplyBody}
+                />
+              </label>
+            </div>
+            <p className="support-card-note">
+              Responses are delivered to the selected ride participants and written into the support history.
+            </p>
+            <div className="confirm-actions">
+              <button className="ghost-button" onClick={() => setSupportComposer(null)} type="button">
+                Cancel
+              </button>
+              <button
+                className="primary-button"
+                disabled={
+                  !selectedSupportThread?.ride_id ||
+                  isActionPending(`support-reply:${String(selectedSupportThread?.ride_id || "")}`)
+                }
+                type="submit"
+              >
+                {isActionPending(`support-reply:${String(selectedSupportThread?.ride_id || "")}`)
+                  ? "Sending..."
+                  : "Send response"}
+              </button>
+            </div>
+          </form>
         </div>
       ) : null}
 

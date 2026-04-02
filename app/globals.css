@@ -114,7 +114,6 @@ button:disabled {
 .auth-card h1,
 .loading-screen-card h1,
 .brand-block h1,
-.hero-copy h2,
 .panel-copy h3 {
   margin: 0;
   letter-spacing: -0.04em;
@@ -123,7 +122,6 @@ button:disabled {
 .auth-copy,
 .sidebar-copy,
 .sidebar-meta,
-.hero-copy p,
 .hero-card small,
 .panel-description,
 .loading-card,
@@ -345,42 +343,12 @@ button:disabled {
   min-width: 0;
 }
 
-.hero-banner,
 .panel-shell {
   border: 1px solid var(--line);
   border-radius: 32px;
   background: var(--surface);
   backdrop-filter: blur(16px);
   box-shadow: var(--shadow-soft);
-}
-
-.hero-banner {
-  display: grid;
-  gap: 22px;
-  padding: 26px;
-}
-
-.hero-copy h2 {
-  font-size: clamp(2rem, 3vw, 3.1rem);
-}
-
-.hero-copy p {
-  max-width: 64ch;
-  line-height: 1.7;
-}
-
-.hero-inline {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 12px;
-  margin-top: 18px;
-}
-
-.hero-timestamp {
-  color: var(--muted);
-  font-size: 0.92rem;
-  font-weight: 700;
 }
 
 .hero-card,
@@ -501,6 +469,51 @@ button:disabled {
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
 }
 
+.branding-preview-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  margin-top: 16px;
+}
+
+.branding-preview-card {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: rgba(255, 249, 243, 0.9);
+}
+
+.branding-preview-frame {
+  display: grid;
+  place-items: center;
+  min-height: 112px;
+  padding: 18px;
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, rgba(53, 34, 29, 0.96) 0%, rgba(33, 23, 21, 0.96) 100%);
+}
+
+.branding-preview-image {
+  width: 72px;
+  height: 72px;
+  object-fit: cover;
+  border-radius: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.08);
+  box-shadow: 0 18px 30px rgba(9, 8, 8, 0.22);
+}
+
+.branding-preview-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.branding-preview-copy strong {
+  font-size: 0.94rem;
+}
+
 .subcard-header {
   display: flex;
   align-items: center;
@@ -515,12 +528,33 @@ button:disabled {
 }
 
 .table-shell {
+  position: relative;
   max-height: min(58vh, 520px);
   overflow: auto;
   overscroll-behavior: contain;
   border: 1px solid var(--line);
   border-radius: 18px;
   background: rgba(255, 255, 255, 0.7);
+}
+
+.table-loading-banner {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(255, 248, 240, 0.96);
+  color: var(--accent-deep);
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.table-loading-dot {
+  width: 8px;
+  height: 8px;
 }
 
 table {
@@ -568,6 +602,40 @@ tbody tr:last-child td {
 
 .stack strong {
   font-size: 0.95rem;
+}
+
+.entity-with-mark {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+}
+
+.entity-mark {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  overflow: hidden;
+  border-radius: 16px;
+  background: linear-gradient(135deg, #d16138, #8f351d);
+  color: #fff6ef;
+  box-shadow: 0 12px 24px rgba(117, 66, 40, 0.16);
+}
+
+.entity-mark span {
+  font-size: 0.9rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+}
+
+.entity-mark img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .muted {
@@ -835,16 +903,47 @@ textarea {
   margin-top: 20px;
 }
 
-.support-layout {
+.prompt-dialog {
   display: grid;
   gap: 18px;
-  grid-template-columns: minmax(280px, 340px) minmax(0, 1fr) minmax(300px, 360px);
 }
 
-.support-actions-stack {
+.prompt-fields {
+  display: grid;
+  gap: 12px;
+}
+
+.prompt-field {
+  display: grid;
+  gap: 8px;
+}
+
+.finance-stack {
+  display: grid;
+  gap: 18px;
+}
+
+.support-ops-grid {
+  display: grid;
+  gap: 18px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.support-queue-stack {
   display: grid;
   gap: 18px;
   align-content: start;
+}
+
+.support-desk {
+  display: grid;
+  gap: 18px;
+  grid-template-columns: minmax(300px, 360px) minmax(0, 1fr);
+}
+
+.support-thread-workspace {
+  display: grid;
+  gap: 18px;
 }
 
 .support-search-toolbar {
@@ -868,6 +967,10 @@ textarea {
   font-size: 0.88rem;
 }
 
+.access-helper-card {
+  margin-bottom: 12px;
+}
+
 .support-thread-list,
 .support-transcript {
   display: grid;
@@ -875,6 +978,10 @@ textarea {
   max-height: min(62vh, 760px);
   overflow-y: auto;
   padding-right: 4px;
+}
+
+.support-transcript {
+  margin-top: 18px;
 }
 
 .support-thread-card {
@@ -1016,12 +1123,31 @@ textarea {
   font-weight: 800;
 }
 
-.support-full-span {
-  grid-column: 1 / -1;
+.support-compose-dialog {
+  width: min(100%, 720px);
+  display: grid;
+  gap: 18px;
 }
 
-.support-secondary-grid {
-  grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
+.support-compose-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.support-compose-grid {
+  align-items: start;
+}
+
+.support-compose-context {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.support-full-span {
+  grid-column: 1 / -1;
 }
 
 @keyframes floatGlow {
@@ -1064,13 +1190,8 @@ textarea {
 }
 
 @media (max-width: 1480px) {
-  .support-layout {
+  .support-desk {
     grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
-  }
-
-  .support-actions-stack {
-    grid-column: 1 / -1;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -1089,13 +1210,8 @@ textarea {
     max-height: none;
   }
 
-  .hero-banner {
-    grid-template-columns: 1fr;
-  }
-
-  .support-layout,
-  .support-actions-stack,
-  .support-secondary-grid,
+  .support-ops-grid,
+  .support-desk,
   .support-thread-summary {
     grid-template-columns: 1fr;
   }
@@ -1107,7 +1223,6 @@ textarea {
     gap: 18px;
   }
 
-  .hero-banner,
   .panel-shell,
   .auth-card,
   .loading-screen-card {
@@ -1149,5 +1264,9 @@ textarea {
   .toast {
     min-width: 0;
     max-width: none;
+  }
+
+  .support-compose-head {
+    flex-direction: column;
   }
 }

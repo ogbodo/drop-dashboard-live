@@ -25,6 +25,7 @@ import {
   updateDispatchSettings,
   updateDriver,
   updatePartner,
+  updatePartnerBranding,
   updatePartnerCommission,
   updateReport,
   updateRideFollowUp,
@@ -50,6 +51,7 @@ type DashboardActionName =
   | "cancel_scheduled_ride"
   | "create_partner"
   | "update_partner"
+  | "update_partner_branding"
   | "update_partner_commission"
   | "update_report"
   | "send_push_notification"
@@ -488,6 +490,7 @@ const requireRole = (session: DashboardSession, role: DashboardRole) => {
 };
 
 const requireAdmin = (session: DashboardSession) => requireRole(session, "admin");
+const requirePartner = (session: DashboardSession) => requireRole(session, "partner");
 
 const adminSectionHandlers: Record<
   Exclude<DashboardSectionName, "workspace">,
@@ -858,6 +861,14 @@ const handleAction = async (request: Request) => {
       requireAdmin(session);
       return jsonSuccess(
         await updatePartner(supabaseAdmin, String(payload.partnerId || ""), payload),
+      );
+    case "update_partner_branding":
+      requirePartner(session);
+      if (!session.partnerId) {
+        throw errorWithStatus("This partner account is not linked to a partner record.", 403);
+      }
+      return jsonSuccess(
+        await updatePartnerBranding(supabaseAdmin, String(session.partnerId), payload),
       );
     case "update_partner_commission":
       requireAdmin(session);
