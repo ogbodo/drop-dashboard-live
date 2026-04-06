@@ -1,6 +1,22 @@
 alter table public.dashboard_accounts
   add column if not exists role_title text;
 
+alter table public.dashboard_accounts
+  drop constraint if exists dashboard_accounts_role_check;
+
+alter table public.dashboard_accounts
+  drop constraint if exists dashboard_accounts_partner_scope;
+
+alter table public.dashboard_accounts
+  add constraint dashboard_accounts_role_check
+  check (role in ('super_admin', 'admin', 'staff', 'partner'));
+
+alter table public.dashboard_accounts
+  add constraint dashboard_accounts_partner_scope check (
+    (role in ('super_admin', 'admin', 'staff') and partner_id is null)
+    or (role = 'partner' and partner_id is not null)
+  );
+
 update public.dashboard_accounts
 set
   role = 'super_admin',
@@ -17,19 +33,3 @@ set role_title = case
   else role_title
 end
 where role in ('super_admin', 'admin', 'partner');
-
-alter table public.dashboard_accounts
-  drop constraint if exists dashboard_accounts_role_check;
-
-alter table public.dashboard_accounts
-  add constraint dashboard_accounts_role_check
-  check (role in ('super_admin', 'admin', 'staff', 'partner'));
-
-alter table public.dashboard_accounts
-  drop constraint if exists dashboard_accounts_partner_scope;
-
-alter table public.dashboard_accounts
-  add constraint dashboard_accounts_partner_scope check (
-    (role in ('super_admin', 'admin', 'staff') and partner_id is null)
-    or (role = 'partner' and partner_id is not null)
-  );
