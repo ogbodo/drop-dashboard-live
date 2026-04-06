@@ -39,7 +39,8 @@ export async function POST(request: NextRequest) {
       displayName?: string | null;
       expiresAt: number;
       partnerId?: string | null;
-      role: "admin" | "partner";
+      role: "super_admin" | "admin" | "staff" | "partner";
+      roleTitle?: string | null;
       sessionToken: string;
       username: string;
     }>("auth/login", {
@@ -56,6 +57,7 @@ export async function POST(request: NextRequest) {
       displayName: session.displayName ?? null,
       partnerId: session.partnerId ?? null,
       role: session.role,
+      roleTitle: session.roleTitle ?? null,
       username: session.username,
     });
 

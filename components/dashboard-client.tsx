@@ -2,6 +2,7 @@
 
 import {
   FormEvent,
+  MouseEvent,
   ReactNode,
   useEffect,
   useEffectEvent,
@@ -60,7 +61,7 @@ type SectionSignalRow = {
 
 const DASHBOARD_SECTION_STORAGE_KEY = "drop.dashboard.active-section";
 
-const adminSectionOrder: SectionKey[] = [
+const leadershipSectionOrder: SectionKey[] = [
   "overview",
   "live-ops",
   "support",
@@ -74,7 +75,23 @@ const adminSectionOrder: SectionKey[] = [
   "settings",
 ];
 
+const staffSectionOrder: SectionKey[] = [
+  "overview",
+  "live-ops",
+  "support",
+  "rides",
+  "drivers",
+  "customers",
+  "scheduled-rides",
+];
+
 const partnerSectionOrder: SectionKey[] = ["workspace"];
+const staffRolePresetOptions = [
+  { label: "Customer Rep", value: "customer_rep" },
+  { label: "Dispatch", value: "dispatch" },
+  { label: "Risk & Trust", value: "risk_trust" },
+  { label: "Custom", value: "custom" },
+] as const;
 const filterableSections = new Set<SectionKey>([
   "rides",
   "drivers",
@@ -361,11 +378,81 @@ const renderTone = (value: string) => {
   return "neutral";
 };
 
+const isLeadershipRole = (role?: DashboardRole | null) =>
+  role === "super_admin" || role === "admin";
+
+const getRoleLabel = (role?: DashboardRole | null, roleTitle?: unknown) => {
+  const customTitle = String(roleTitle || "").trim();
+  if (role === "staff" && customTitle) {
+    return customTitle;
+  }
+
+  switch (role) {
+    case "super_admin":
+      return "Super admin";
+    case "admin":
+      return "Admin";
+    case "staff":
+      return "Staff";
+    case "partner":
+      return "Partner";
+    default:
+      return "Team";
+  }
+};
+
+const formatDuration = (value: unknown) => {
+  const totalSeconds = Number(value || 0);
+
+  if (!Number.isFinite(totalSeconds) || totalSeconds <= 0) {
+    return "—";
+  }
+
+  const totalMinutes = Math.ceil(totalSeconds / 60);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+
+  if (hours && minutes) {
+    return `${hours}h ${minutes}m`;
+  }
+
+  if (hours) {
+    return `${hours}h`;
+  }
+
+  return `${minutes}m`;
+};
+
+const getRideTypeLabel = (ride: AnyRecord) => (ride?.is_delivery ? "Delivery" : "Ride");
+
+const getDeliveryImageUrl = (ride: AnyRecord) => {
+  const fromPayload = String(ride?.delivery_item_info?.image || "").trim();
+  const direct = String(ride?.item_image_url || "").trim();
+  return fromPayload || direct || "";
+};
+
+const resolveStaffRoleTitle = (preset: string, customValue: string) => {
+  const customTitle = customValue.trim();
+  if (preset === "custom") {
+    return customTitle;
+  }
+
+  return (
+    staffRolePresetOptions.find((option) => option.value === preset)?.label ||
+    customTitle ||
+    "Staff"
+  );
+};
+
 const getDefaultSection = (role: DashboardRole) =>
   role === "partner" ? "workspace" : "overview";
 
 const getAllowedSections = (role?: DashboardRole | null) =>
-  role === "partner" ? partnerSectionOrder : adminSectionOrder;
+  role === "partner"
+    ? partnerSectionOrder
+    : role === "staff"
+      ? staffSectionOrder
+      : leadershipSectionOrder;
 
 const getStoredSection = (allowedSections: SectionKey[]) => {
   try {
@@ -583,13 +670,17 @@ function DataTable<Row extends AnyRecord>({
   emptyMessage,
   isLoading,
   loadingMessage,
+  onRowClick,
   rows,
+  selectedRowId,
 }: {
   columns: TableColumn<Row>[];
   emptyMessage: string;
   isLoading?: boolean;
   loadingMessage?: string;
+  onRowClick?: (row: Row) => void;
   rows: Row[];
+  selectedRowId?: string | null;
 }) {
   if (!rows.length) {
     return <EmptyState message={emptyMessage} title="Nothing to show" />;
@@ -612,13 +703,34 @@ function DataTable<Row extends AnyRecord>({
           </tr>
         </thead>
         <tbody>
-          {rows.map((row, index) => (
-            <tr key={String(row.id || row.key || index)}>
+          {rows.map((row, index) => {
+            const rowKey = String(row.id || row.key || index);
+            const isSelected = selectedRowId === rowKey;
+
+            return (
+            <tr
+              aria-selected={isSelected}
+              className={`${onRowClick ? "is-clickable" : ""} ${isSelected ? "is-selected" : ""}`}
+              key={rowKey}
+              onClick={onRowClick ? () => onRowClick(row) : undefined}
+              onKeyDown={
+                onRowClick
+                  ? (event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        onRowClick(row);
+                      }
+                    }
+                  : undefined
+              }
+              tabIndex={onRowClick ? 0 : undefined}
+            >
               {columns.map((column) => (
-                <td key={`${String(row.id || index)}-${column.label}`}>{column.render(row)}</td>
+                <td key={`${rowKey}-${column.label}`}>{column.render(row)}</td>
               ))}
             </tr>
-          ))}
+            );
+          })}
         </tbody>
       </table>
     </div>
@@ -639,6 +751,79 @@ function Stack({
       <strong>{title}</strong>
       {subtitle ? <span className="muted">{subtitle}</span> : null}
       {tertiary ? <span className="muted mono">{tertiary}</span> : null}
+    </div>
+  );
+}
+
+function IdentityCard({
+  avatarUrl,
+  subtitle,
+  tertiary,
+  title,
+}: {
+  avatarUrl?: string | null;
+  subtitle?: string;
+  tertiary?: string;
+  title: string;
+}) {
+  const src = String(avatarUrl || "").trim() || createInitialsLogoDataUrl(title);
+
+  return (
+    <div className="detail-identity">
+      <img
+        alt={title}
+        className="detail-avatar"
+        onError={(event) => {
+          event.currentTarget.src = createInitialsLogoDataUrl(title);
+        }}
+        src={src}
+      />
+      <Stack subtitle={subtitle} tertiary={tertiary} title={title} />
+    </div>
+  );
+}
+
+function DetailField({
+  label,
+  value,
+}: {
+  label: string;
+  value: ReactNode;
+}) {
+  return (
+    <div className="detail-field">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function ImageGallery({
+  images,
+}: {
+  images: Array<{
+    label: string;
+    url: string;
+  }>;
+}) {
+  if (!images.length) {
+    return <p className="detail-note">No images available on this record yet.</p>;
+  }
+
+  return (
+    <div className="detail-image-grid">
+      {images.map((image) => (
+        <a
+          className="detail-image-card"
+          href={image.url}
+          key={`${image.label}-${image.url}`}
+          rel="noreferrer"
+          target="_blank"
+        >
+          <img alt={image.label} src={image.url} />
+          <span>{image.label}</span>
+        </a>
+      ))}
     </div>
   );
 }
@@ -722,6 +907,7 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
     ridesPaymentStatus: "all",
     ridesSearch: "",
     ridesStatus: "all",
+    ridesTripType: "all",
     scheduledSearch: "",
     scheduledStatus: "all",
     supportSearch: "",
@@ -760,6 +946,11 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
     title: "",
   });
   const [selectedSupportRideId, setSelectedSupportRideId] = useState<string | null>(null);
+  const [selectedRideId, setSelectedRideId] = useState<string | null>(null);
+  const [selectedDriverId, setSelectedDriverId] = useState<string | null>(null);
+  const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
+  const [leadershipRole, setLeadershipRole] = useState<"admin" | "super_admin">("admin");
+  const [staffRolePreset, setStaffRolePreset] = useState<string>(staffRolePresetOptions[0].value);
   const [supportTypingLabel, setSupportTypingLabel] = useState("");
   const [supportUnreadByRide, setSupportUnreadByRide] = useState<Record<string, number>>({});
   const [supportUnreadTotal, setSupportUnreadTotal] = useState(0);
@@ -871,6 +1062,7 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
         paymentStatus: filters.ridesPaymentStatus,
         search: filters.ridesSearch,
         status: filters.ridesStatus,
+        tripType: filters.ridesTripType,
       });
     }
 
@@ -1143,6 +1335,7 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
     filters.ridesPaymentStatus,
     filters.ridesSearch,
     filters.ridesStatus,
+    filters.ridesTripType,
     filters.scheduledSearch,
     filters.scheduledStatus,
     filters.supportSearch,
@@ -1607,26 +1800,76 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
     const formElement = event.currentTarget;
     const form = new FormData(formElement);
     const username = String(form.get("username") || "");
+    const nextRole = String(form.get("role") || leadershipRole) as "admin" | "super_admin";
+    const roleTitle = getRoleLabel(nextRole);
 
     await runConfirmedAction(
       "create-admin",
       {
         confirmLabel: "Create admin",
         message:
-          "This will create a new admin account with full operating access to the Drop control room.",
-        title: `Create ${username || "this"} admin account?`,
+          "This will create a new leadership account with full operating access to the Drop control room.",
+        title: `Create ${username || "this"} ${roleTitle.toLowerCase()} account?`,
         tone: "success",
       },
       async () => {
         await adminAction("create_admin", {
           displayName: String(form.get("displayName") || ""),
           password: String(form.get("password") || ""),
+          role: nextRole,
+          roleTitle,
           username,
         });
 
         formElement.reset();
+        setLeadershipRole("admin");
         await refreshSections(["access"], { background: true });
-        notify("Admin created", "A new admin can now sign in to operate Drop.", "success");
+        notify(
+          "Leadership account created",
+          `A new ${roleTitle.toLowerCase()} account can now sign in to operate Drop.`,
+          "success",
+        );
+      },
+    );
+  }
+
+  async function submitCreateStaff(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    const username = String(form.get("username") || "");
+    const rolePreset = String(form.get("rolePreset") || staffRolePreset);
+    const roleTitle = resolveStaffRoleTitle(
+      rolePreset,
+      String(form.get("customRoleTitle") || ""),
+    );
+
+    if (!roleTitle) {
+      notify("Role title required", "Choose or enter a staff role title.", "warning");
+      return;
+    }
+
+    await runConfirmedAction(
+      "create-staff",
+      {
+        confirmLabel: "Add staff",
+        message:
+          "This will create a staff account with operations access and the selected role title.",
+        title: `Add ${username || "this"} staff account?`,
+        tone: "success",
+      },
+      async () => {
+        await adminAction("create_staff", {
+          displayName: String(form.get("displayName") || ""),
+          password: String(form.get("password") || ""),
+          roleTitle,
+          username,
+        });
+
+        formElement.reset();
+        setStaffRolePreset(staffRolePresetOptions[0].value);
+        await refreshSections(["access"], { background: true });
+        notify("Staff added", `${roleTitle} can now sign in with staff access.`, "success");
       },
     );
   }
@@ -1699,6 +1942,38 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
           await refreshSections(["access"], { background: true });
         }
         notify("Password updated", "Your password was changed successfully.", "success");
+      },
+    );
+  }
+
+  async function handleAccountStatusToggle(
+    accountId: string,
+    isCurrentlyActive: boolean,
+    label: string,
+  ) {
+    await runConfirmedAction(
+      `account-status:${accountId}`,
+      {
+        confirmLabel: isCurrentlyActive ? "Deactivate account" : "Reactivate account",
+        message: isCurrentlyActive
+          ? "This removes the account's access until it is reactivated."
+          : "This restores the account's ability to sign in again.",
+        title: isCurrentlyActive
+          ? `Deactivate ${label}?`
+          : `Reactivate ${label}?`,
+        tone: isCurrentlyActive ? "danger" : "success",
+      },
+      async () => {
+        await adminAction("toggle_account_status", {
+          accountId,
+          isActive: !isCurrentlyActive,
+        });
+        await refreshSections(["access"], { background: true });
+        notify(
+          isCurrentlyActive ? "Account deactivated" : "Account reactivated",
+          `${label} was updated successfully.`,
+          "success",
+        );
       },
     );
   }
@@ -2087,6 +2362,54 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
     supportConversationThreads[0] ||
     null;
   const supportNavUnreadCount = activeSection === "support" ? 0 : supportUnreadTotal;
+  const selectedRide =
+    rides.find((ride) => String(ride.id) === selectedRideId) || null;
+  const selectedDriver =
+    drivers.find((driver) => String(driver.id) === selectedDriverId) || null;
+  const selectedCustomer =
+    customers.find((customer) => String(customer.id) === selectedCustomerId) || null;
+  const isLeadershipSession = isLeadershipRole(session?.role);
+  const isSuperAdminSession = session?.role === "super_admin";
+  const isStaffSession = session?.role === "staff";
+  const canManageLeadershipAccounts = isSuperAdminSession;
+  const canManageStaffAccounts = isLeadershipSession;
+  const canReviewDriverDocuments = isLeadershipSession;
+  const canEditOperationalRecords = isLeadershipSession;
+  const canModerateSupport = isLeadershipSession || isStaffSession;
+  const canBroadcastNotifications = isLeadershipSession;
+  const currentRoleLabel = getRoleLabel(session?.role, session?.roleTitle);
+
+  const canResetManagedAccountPassword = (accountRow: AnyRecord) => {
+    if (!session) {
+      return false;
+    }
+
+    if (isSuperAdminSession) {
+      return true;
+    }
+
+    if (session.role === "admin") {
+      return accountRow.role === "staff" || accountRow.role === "partner";
+    }
+
+    return false;
+  };
+
+  const canToggleManagedAccount = (accountRow: AnyRecord) => {
+    if (!session || !canManageStaffAccounts) {
+      return false;
+    }
+
+    if (String(accountRow.id || "") === String(session.accountId || "")) {
+      return false;
+    }
+
+    if (accountRow.is_bootstrap) {
+      return false;
+    }
+
+    return accountRow.role === "staff";
+  };
 
   const getAppConfigValue = (key: string) =>
     settings?.appConfigs?.find?.((item: AnyRecord) => item.key === key)?.value || {};
@@ -2101,6 +2424,27 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
   const activeBrowserIconSrc = session?.role === "partner" ? partnerLogoSrc : adminLogoSrc;
   const activeBrandFallbackSrc =
     session?.role === "partner" ? partnerFallbackLogoSrc : DEFAULT_DASHBOARD_LOGO;
+
+  useEffect(() => {
+    if (selectedRideId && !rides.some((ride) => String(ride.id) === selectedRideId)) {
+      setSelectedRideId(null);
+    }
+  }, [rides, selectedRideId]);
+
+  useEffect(() => {
+    if (selectedDriverId && !drivers.some((driver) => String(driver.id) === selectedDriverId)) {
+      setSelectedDriverId(null);
+    }
+  }, [drivers, selectedDriverId]);
+
+  useEffect(() => {
+    if (
+      selectedCustomerId &&
+      !customers.some((customer) => String(customer.id) === selectedCustomerId)
+    ) {
+      setSelectedCustomerId(null);
+    }
+  }, [customers, selectedCustomerId]);
 
   useEffect(() => {
     if (!supportConversationThreads.length) {
@@ -2705,6 +3049,22 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
                 </select>
               </label>
               <label>
+                Trip type
+                <select
+                  onChange={(event) =>
+                    setFilters((current) => ({
+                      ...current,
+                      ridesTripType: event.target.value,
+                    }))
+                  }
+                  value={filters.ridesTripType}
+                >
+                  <option value="all">All trips</option>
+                  <option value="ride">All rides</option>
+                  <option value="delivery">All deliveries</option>
+                </select>
+              </label>
+              <label>
                 Payment status
                 <select
                   onChange={(event) =>
@@ -2728,92 +3088,224 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
           {loadingSections.rides && !rides.length ? (
             <LoadingCard message="Refreshing rides..." />
           ) : (
-            <Subcard eyebrow="Operations" title="Ride control board">
-              <DataTable
-                columns={[
-                  {
-                    label: "Trip",
-                    render: (ride) => (
-                      <Stack
-                        subtitle={ride.destination_address || "Unknown destination"}
-                        tertiary={ride.id}
-                        title={ride.pickup_address || "Unknown pickup"}
-                      />
-                    ),
-                  },
-                  {
-                    label: "Actors",
-                    render: (ride) => (
-                      <Stack
-                        subtitle={`Driver: ${ride.driver?.full_name || "Unassigned"}`}
-                        title={ride.customer?.full_name || "No customer"}
-                      />
-                    ),
-                  },
-                  {
-                    label: "Commercials",
-                    render: (ride) => (
-                      <Stack
-                        subtitle={`${ride.paymentMode || "Transfer"} / ${ride.service?.label || ride.requested_vehicle_type || "—"}`}
-                        title={formatCurrency(ride.price)}
-                      />
-                    ),
-                  },
-                  {
-                    label: "Status",
-                    render: (ride) => (
-                      <div className="tag-set">
-                        <Pill label={ride.status || "unknown"} tone={renderTone(ride.status || "")} />
-                        <Pill
-                          label={ride.payment_status || "pending"}
-                          tone={renderTone(ride.payment_status || "")}
+            <div className="detail-layout">
+              <Subcard eyebrow="Operations" title="Ride control board">
+                <DataTable
+                  columns={[
+                    {
+                      label: "Trip",
+                      render: (ride) => (
+                        <Stack
+                          subtitle={ride.destination_address || "Unknown destination"}
+                          tertiary={ride.id}
+                          title={ride.pickup_address || "Unknown pickup"}
                         />
-                        <Pill
-                          label={ride.payment_follow_up_status || "none"}
-                          tone={renderTone(ride.payment_follow_up_status || "")}
+                      ),
+                    },
+                    {
+                      label: "Actors",
+                      render: (ride) => (
+                        <Stack
+                          subtitle={`Driver: ${ride.driver?.full_name || "Unassigned"}`}
+                          title={ride.customer?.full_name || "No customer"}
                         />
+                      ),
+                    },
+                    {
+                      label: "Commercials",
+                      render: (ride) => (
+                        <Stack
+                          subtitle={`${ride.paymentMode || "Transfer"} / ${ride.service?.label || ride.requested_vehicle_type || "—"}`}
+                          title={formatCurrency(ride.price)}
+                        />
+                      ),
+                    },
+                    {
+                      label: "Status",
+                      render: (ride) => (
+                        <div className="tag-set">
+                          <Pill label={getRideTypeLabel(ride)} tone={ride.is_delivery ? "warning" : "info"} />
+                          <Pill label={ride.status || "unknown"} tone={renderTone(ride.status || "")} />
+                          <Pill
+                            label={ride.payment_status || "pending"}
+                            tone={renderTone(ride.payment_status || "")}
+                          />
+                        </div>
+                      ),
+                    },
+                    {
+                      label: "Actions",
+                      render: (ride) =>
+                        canEditOperationalRecords ? (
+                          <div className="inline-actions">
+                            <button
+                              className="ghost-button"
+                              disabled={
+                                isActionPending(`follow-up:${String(ride.id)}`) ||
+                                isActionPending(`cancel-ride:${String(ride.id)}`)
+                              }
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                void handleRideFollowUp(
+                                  String(ride.id),
+                                  String(ride.payment_follow_up_status || "none"),
+                                  String(ride.payment_follow_up_note || ""),
+                                );
+                              }}
+                              type="button"
+                            >
+                              {isActionPending(`follow-up:${String(ride.id)}`) ? "Saving..." : "Follow-up"}
+                            </button>
+                            <button
+                              className="danger-button"
+                              disabled={isActionPending(`cancel-ride:${String(ride.id)}`)}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                void handleRideCancel(String(ride.id));
+                              }}
+                              type="button"
+                            >
+                              {isActionPending(`cancel-ride:${String(ride.id)}`) ? "Cancelling..." : "Cancel"}
+                            </button>
+                          </div>
+                        ) : (
+                          <span className="muted">Click row to inspect</span>
+                        ),
+                    },
+                  ]}
+                  emptyMessage="No rides match the current filters."
+                  isLoading={loadingSections.rides}
+                  loadingMessage="Refreshing rides..."
+                  onRowClick={(ride) => setSelectedRideId(String(ride.id))}
+                  rows={rides}
+                  selectedRowId={selectedRideId}
+                />
+              </Subcard>
+
+              <Subcard
+                eyebrow="Selected trip"
+                title={selectedRide ? `${getRideTypeLabel(selectedRide)} ${selectedRide.id}` : "Choose a ride"}
+              >
+                {!selectedRide ? (
+                  <EmptyState
+                    message="Click any ride row to inspect the customer, driver, payment, timing, and delivery image details."
+                    title="No ride selected"
+                  />
+                ) : (
+                  <>
+                    <div className="detail-identity-grid">
+                      <IdentityCard
+                        avatarUrl={String(selectedRide.customer?.avatar_url || "")}
+                        subtitle={selectedRide.customer?.phone || "No phone"}
+                        tertiary={selectedRide.customer?.email || "No email"}
+                        title={selectedRide.customer?.full_name || "Unknown customer"}
+                      />
+                      <IdentityCard
+                        avatarUrl={String(selectedRide.driver?.avatar_url || "")}
+                        subtitle={selectedRide.driver?.phone || "No phone"}
+                        tertiary={selectedRide.driver?.email || "No email"}
+                        title={selectedRide.driver?.full_name || "Unassigned driver"}
+                      />
+                    </div>
+
+                    <div className="tag-set">
+                      <Pill label={getRideTypeLabel(selectedRide)} tone={selectedRide.is_delivery ? "warning" : "info"} />
+                      <Pill label={selectedRide.status || "unknown"} tone={renderTone(selectedRide.status || "")} />
+                      <Pill
+                        label={selectedRide.payment_status || "pending"}
+                        tone={renderTone(selectedRide.payment_status || "")}
+                      />
+                      <Pill
+                        label={selectedRide.payment_follow_up_status || "none"}
+                        tone={renderTone(selectedRide.payment_follow_up_status || "")}
+                      />
+                    </div>
+
+                    {selectedRide.sensitive_fields_hidden ? (
+                      <div className="detail-note-card">
+                        Internal payout and margin figures are hidden for staff accounts.
                       </div>
-                    ),
-                  },
-                  {
-                    label: "Actions",
-                    render: (ride) => (
-                      <div className="inline-actions">
-                        <button
-                          className="ghost-button"
-                          disabled={
-                            isActionPending(`follow-up:${String(ride.id)}`) ||
-                            isActionPending(`cancel-ride:${String(ride.id)}`)
-                          }
-                          onClick={() =>
-                            void handleRideFollowUp(
-                              String(ride.id),
-                              String(ride.payment_follow_up_status || "none"),
-                              String(ride.payment_follow_up_note || ""),
-                            )
-                          }
-                          type="button"
-                        >
-                          {isActionPending(`follow-up:${String(ride.id)}`) ? "Saving..." : "Follow-up"}
-                        </button>
-                        <button
-                          className="danger-button"
-                          disabled={isActionPending(`cancel-ride:${String(ride.id)}`)}
-                          onClick={() => void handleRideCancel(String(ride.id))}
-                          type="button"
-                        >
-                          {isActionPending(`cancel-ride:${String(ride.id)}`) ? "Cancelling..." : "Cancel"}
-                        </button>
+                    ) : null}
+
+                    <div className="detail-grid">
+                      <DetailField label="Pickup" value={selectedRide.pickup_address || "—"} />
+                      <DetailField label="Dropoff" value={selectedRide.destination_address || "—"} />
+                      <DetailField label="Driver fare" value={formatCurrency(selectedRide.price)} />
+                      <DetailField
+                        label="Customer charge"
+                        value={
+                          selectedRide.financials?.customer_total_amount != null
+                            ? formatCurrency(selectedRide.financials.customer_total_amount)
+                            : "—"
+                        }
+                      />
+                      <DetailField
+                        label="Service fee"
+                        value={
+                          selectedRide.financials?.service_fee_amount != null
+                            ? formatCurrency(selectedRide.financials.service_fee_amount)
+                            : "—"
+                        }
+                      />
+                      <DetailField
+                        label="Quoted fare"
+                        value={
+                          selectedRide.quoted_price_amount != null
+                            ? formatCurrency(selectedRide.quoted_price_amount)
+                            : "—"
+                        }
+                      />
+                      <DetailField label="Payment mode" value={selectedRide.paymentMode || "—"} />
+                      <DetailField
+                        label="Payment record"
+                        value={
+                          selectedRide.latest_payment
+                            ? `${selectedRide.latest_payment.payment_method || "payment"} / ${selectedRide.latest_payment.provider || "provider"}`
+                            : "—"
+                        }
+                      />
+                      <DetailField label="Created" value={formatDateTime(selectedRide.created_at)} />
+                      <DetailField label="Accepted" value={formatDateTime(selectedRide.accepted_at)} />
+                      <DetailField label="Completed" value={formatDateTime(selectedRide.completed_at)} />
+                      <DetailField label="Pickup code" value={selectedRide.pickup_code || "—"} />
+                      <DetailField label="Dropoff code" value={selectedRide.dropoff_code || "—"} />
+                      <DetailField
+                        label="Trip duration"
+                        value={formatDuration(selectedRide.actual_trip_seconds)}
+                      />
+                      <DetailField
+                        label="Pickup wait"
+                        value={formatDuration(selectedRide.pickup_wait_seconds)}
+                      />
+                      <DetailField
+                        label="Billable wait"
+                        value={formatDuration(selectedRide.billable_waiting_seconds)}
+                      />
+                    </div>
+
+                    {selectedRide.payment_follow_up_note ? (
+                      <div className="detail-note-card">
+                        <strong>Follow-up note</strong>
+                        <p>{selectedRide.payment_follow_up_note}</p>
                       </div>
-                    ),
-                  },
-                ]}
-                emptyMessage="No rides match the current filters."
-                isLoading={loadingSections.rides}
-                loadingMessage="Refreshing rides..."
-                rows={rides}
-              />
-            </Subcard>
+                    ) : null}
+
+                    {selectedRide.delivery_item_info ? (
+                      <div className="detail-json-card">
+                        <span>Delivery metadata</span>
+                        <pre>{JSON.stringify(selectedRide.delivery_item_info, null, 2)}</pre>
+                      </div>
+                    ) : null}
+
+                    <ImageGallery
+                      images={[
+                        { label: "Delivery item", url: getDeliveryImageUrl(selectedRide) },
+                      ].filter((image) => image.url)}
+                    />
+                  </>
+                )}
+              </Subcard>
+            </div>
           )}
         </>
       )}
@@ -2859,135 +3351,304 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
           {loadingSections.drivers && !drivers.length ? (
             <LoadingCard message="Refreshing drivers..." />
           ) : (
-            <Subcard eyebrow="Onboarding + subscription" title="Driver operations">
-              <DataTable
-                columns={[
-                  {
-                    label: "Driver",
-                    render: (driver) => (
-                      <Stack
-                        subtitle={driver.phone || "No phone"}
-                        tertiary={driver.email || "No email"}
-                        title={driver.full_name || "Unnamed driver"}
-                      />
-                    ),
-                  },
-                  {
-                    label: "Activation",
-                    render: (driver) => (
-                      <div className="stack">
-                        <div className="tag-set">
-                          <Pill
-                            label={driver.activation_state || "unknown"}
-                            tone={renderTone(driver.activation_state || "")}
-                          />
-                          <Pill
-                            label={driver.is_verified ? "Verified" : "Not verified"}
-                            tone={driver.is_verified ? "success" : "danger"}
-                          />
-                          <Pill
-                            label={driver.has_paid ? "Paid" : "Unpaid"}
-                            tone={driver.has_paid ? "success" : "warning"}
-                          />
-                        </div>
-                        <span className="muted">
-                          Expires {formatDate(driver.subscription_expires_at)}
-                        </span>
-                      </div>
-                    ),
-                  },
-                  {
-                    label: "Vehicle + wallet",
-                    render: (driver) => (
-                      <Stack
-                        subtitle={`Available ${formatCurrency(driver.wallet?.available_balance || 0)}`}
-                        title={
-                          driver.vehicle
-                            ? `${driver.vehicle.make} ${driver.vehicle.model} (${driver.vehicle.plate_number})`
-                            : "No vehicle linked"
-                        }
-                      />
-                    ),
-                  },
-                  {
-                    label: "Payouts",
-                    render: (driver) => {
-                      const latestPayout = driver.recent_payouts?.[0] || null;
-                      const payoutAccount = driver.default_payout_account || null;
-
-                      return (
+            <div className="detail-layout">
+              <Subcard eyebrow="Onboarding + subscription" title="Driver operations">
+                <DataTable
+                  columns={[
+                    {
+                      label: "Driver",
+                      render: (driver) => (
                         <Stack
-                          subtitle={
-                            payoutAccount
-                              ? `${payoutAccount.bank_name || payoutAccount.provider || "Payout account"} / ${maskAccountNumber(payoutAccount.account_number)}`
-                              : "No payout account configured"
-                          }
-                          tertiary={
-                            latestPayout
-                              ? `${formatCurrency(latestPayout.amount)} / ${latestPayout.status || "requested"} / ${formatDateTime(latestPayout.completed_at || latestPayout.requested_at)}`
-                              : "No payout requests yet"
-                          }
+                          subtitle={driver.phone || "No phone"}
+                          tertiary={driver.email || "No email"}
+                          title={driver.full_name || "Unnamed driver"}
+                        />
+                      ),
+                    },
+                    {
+                      label: "Activation",
+                      render: (driver) => (
+                        <div className="stack">
+                          <div className="tag-set">
+                            <Pill
+                              label={driver.activation_state || "unknown"}
+                              tone={renderTone(driver.activation_state || "")}
+                            />
+                            <Pill
+                              label={driver.is_verified ? "Verified" : "Not verified"}
+                              tone={driver.is_verified ? "success" : "danger"}
+                            />
+                            <Pill
+                              label={driver.has_paid ? "Paid" : "Unpaid"}
+                              tone={driver.has_paid ? "success" : "warning"}
+                            />
+                          </div>
+                          <span className="muted">
+                            Expires {formatDate(driver.subscription_expires_at)}
+                          </span>
+                        </div>
+                      ),
+                    },
+                    {
+                      label: "Vehicle + wallet",
+                      render: (driver) => (
+                        <Stack
+                          subtitle={`Available ${formatCurrency(driver.wallet?.available_balance || 0)}`}
                           title={
-                            payoutAccount?.account_name ||
-                            payoutAccount?.provider_email ||
-                            "Payout readiness not set"
+                            driver.vehicle
+                              ? `${driver.vehicle.make} ${driver.vehicle.model} (${driver.vehicle.plate_number})`
+                              : "No vehicle linked"
                           }
                         />
-                      );
+                      ),
                     },
-                  },
-                  {
-                    label: "Actions",
-                    render: (driver) => (
+                    {
+                      label: "Payouts",
+                      render: (driver) => {
+                        const latestPayout = driver.recent_payouts?.[0] || null;
+                        const payoutAccount = driver.default_payout_account || null;
+
+                        return (
+                          <Stack
+                            subtitle={
+                              payoutAccount
+                                ? `${payoutAccount.bank_name || payoutAccount.provider || "Payout account"} / ${maskAccountNumber(payoutAccount.account_number)}`
+                                : driver.sensitive_fields_hidden
+                                  ? "Hidden for staff access"
+                                  : "No payout account configured"
+                            }
+                            tertiary={
+                              latestPayout
+                                ? `${formatCurrency(latestPayout.amount)} / ${latestPayout.status || "requested"} / ${formatDateTime(latestPayout.completed_at || latestPayout.requested_at)}`
+                                : "No payout requests yet"
+                            }
+                            title={
+                              payoutAccount?.account_name ||
+                              payoutAccount?.provider_email ||
+                              (driver.sensitive_fields_hidden ? "Restricted" : "Payout readiness not set")
+                            }
+                          />
+                        );
+                      },
+                    },
+                    {
+                      label: "Actions",
+                      render: (driver) =>
+                        canReviewDriverDocuments ? (
+                          <div className="inline-actions">
+                            <button
+                              className="ghost-button"
+                              disabled={
+                                isActionPending(`driver:is_verified:${String(driver.id)}`) ||
+                                isActionPending(`driver:has_paid:${String(driver.id)}`)
+                              }
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                void handleDriverToggle(
+                                  String(driver.id),
+                                  "is_verified",
+                                  !driver.is_verified,
+                                );
+                              }}
+                              type="button"
+                            >
+                              {isActionPending(`driver:is_verified:${String(driver.id)}`)
+                                ? "Updating..."
+                                : driver.is_verified
+                                  ? "Revoke verification"
+                                  : "Approve driver"}
+                            </button>
+                            <button
+                              className="success-button"
+                              disabled={
+                                isActionPending(`driver:has_paid:${String(driver.id)}`) ||
+                                isActionPending(`driver:is_verified:${String(driver.id)}`)
+                              }
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                void handleDriverToggle(String(driver.id), "has_paid", !driver.has_paid);
+                              }}
+                              type="button"
+                            >
+                              {isActionPending(`driver:has_paid:${String(driver.id)}`)
+                                ? "Updating..."
+                                : driver.has_paid
+                                  ? "Mark unpaid"
+                                  : "Mark paid"}
+                            </button>
+                          </div>
+                        ) : (
+                          <span className="muted">Click row to inspect</span>
+                        ),
+                    },
+                  ]}
+                  emptyMessage="No drivers match the current search."
+                  isLoading={loadingSections.drivers}
+                  loadingMessage="Refreshing drivers..."
+                  onRowClick={(driver) => setSelectedDriverId(String(driver.id))}
+                  rows={drivers}
+                  selectedRowId={selectedDriverId}
+                />
+              </Subcard>
+
+              <Subcard
+                eyebrow="Selected driver"
+                title={selectedDriver ? selectedDriver.full_name || "Driver record" : "Choose a driver"}
+              >
+                {!selectedDriver ? (
+                  <EmptyState
+                    message="Click a driver row to review uploaded particulars, linked vehicle details, avatars, and recent trip activity."
+                    title="No driver selected"
+                  />
+                ) : (
+                  <>
+                    <IdentityCard
+                      avatarUrl={String(selectedDriver.avatar_url || "")}
+                      subtitle={selectedDriver.phone || "No phone"}
+                      tertiary={selectedDriver.email || "No email"}
+                      title={selectedDriver.full_name || "Unnamed driver"}
+                    />
+
+                    <div className="tag-set">
+                      <Pill
+                        label={selectedDriver.activation_state || "unknown"}
+                        tone={renderTone(selectedDriver.activation_state || "")}
+                      />
+                      <Pill
+                        label={selectedDriver.is_verified ? "Verified" : "Not verified"}
+                        tone={selectedDriver.is_verified ? "success" : "danger"}
+                      />
+                      <Pill
+                        label={selectedDriver.has_paid ? "Paid" : "Unpaid"}
+                        tone={selectedDriver.has_paid ? "success" : "warning"}
+                      />
+                    </div>
+
+                    {selectedDriver.sensitive_fields_hidden ? (
+                      <div className="detail-note-card">
+                        Government IDs, verification documents, wallet balances, and payout details are hidden for staff accounts.
+                      </div>
+                    ) : null}
+
+                    {canReviewDriverDocuments ? (
                       <div className="inline-actions">
                         <button
                           className="ghost-button"
                           disabled={
-                            isActionPending(`driver:is_verified:${String(driver.id)}`) ||
-                            isActionPending(`driver:has_paid:${String(driver.id)}`)
+                            isActionPending(`driver:is_verified:${String(selectedDriver.id)}`) ||
+                            isActionPending(`driver:has_paid:${String(selectedDriver.id)}`)
                           }
                           onClick={() =>
                             void handleDriverToggle(
-                              String(driver.id),
+                              String(selectedDriver.id),
                               "is_verified",
-                              !driver.is_verified,
+                              !selectedDriver.is_verified,
                             )
                           }
                           type="button"
                         >
-                          {isActionPending(`driver:is_verified:${String(driver.id)}`)
-                            ? "Updating..."
-                            : driver.is_verified
-                              ? "Revoke verification"
-                              : "Approve driver"}
+                          {selectedDriver.is_verified ? "Revoke verification" : "Approve driver"}
                         </button>
                         <button
                           className="success-button"
                           disabled={
-                            isActionPending(`driver:has_paid:${String(driver.id)}`) ||
-                            isActionPending(`driver:is_verified:${String(driver.id)}`)
+                            isActionPending(`driver:has_paid:${String(selectedDriver.id)}`) ||
+                            isActionPending(`driver:is_verified:${String(selectedDriver.id)}`)
                           }
                           onClick={() =>
-                            void handleDriverToggle(String(driver.id), "has_paid", !driver.has_paid)
+                            void handleDriverToggle(
+                              String(selectedDriver.id),
+                              "has_paid",
+                              !selectedDriver.has_paid,
+                            )
                           }
                           type="button"
                         >
-                          {isActionPending(`driver:has_paid:${String(driver.id)}`)
-                            ? "Updating..."
-                            : driver.has_paid
-                              ? "Mark unpaid"
-                              : "Mark paid"}
+                          {selectedDriver.has_paid ? "Mark unpaid" : "Mark paid"}
                         </button>
                       </div>
-                    ),
-                  },
-                ]}
-                emptyMessage="No drivers match the current search."
-                isLoading={loadingSections.drivers}
-                loadingMessage="Refreshing drivers..."
-                rows={drivers}
-              />
-            </Subcard>
+                    ) : null}
+
+                    <div className="detail-grid">
+                      <DetailField label="Gender" value={selectedDriver.gender || "—"} />
+                      <DetailField label="Date of birth" value={formatDate(selectedDriver.dob)} />
+                      <DetailField label="Driver type" value={selectedDriver.driver_type || "—"} />
+                      <DetailField label="Vehicle category" value={selectedDriver.vehicle_category || "—"} />
+                      <DetailField label="Rating" value={String(selectedDriver.rating || "—")} />
+                      <DetailField label="Total trips" value={formatNumber(selectedDriver.total_trips || 0)} />
+                      <DetailField label="Subscription expiry" value={formatDate(selectedDriver.subscription_expires_at)} />
+                      <DetailField label="Last online" value={formatDateTime(selectedDriver.last_online_at)} />
+                      <DetailField
+                        label="Vehicle"
+                        value={
+                          selectedDriver.vehicle
+                            ? `${selectedDriver.vehicle.make || ""} ${selectedDriver.vehicle.model || ""} ${selectedDriver.vehicle.plate_number ? `(${selectedDriver.vehicle.plate_number})` : ""}`.trim()
+                            : "No vehicle linked"
+                        }
+                      />
+                      <DetailField
+                        label="Wallet"
+                        value={
+                          selectedDriver.wallet
+                            ? `${formatCurrency(selectedDriver.wallet.available_balance || 0)} available`
+                            : selectedDriver.sensitive_fields_hidden
+                              ? "Hidden for staff"
+                              : "No wallet data"
+                        }
+                      />
+                      <DetailField
+                        label="Payout account"
+                        value={
+                          selectedDriver.default_payout_account
+                            ? `${selectedDriver.default_payout_account.bank_name || selectedDriver.default_payout_account.provider || "Account"} / ${maskAccountNumber(selectedDriver.default_payout_account.account_number)}`
+                            : selectedDriver.sensitive_fields_hidden
+                              ? "Hidden for staff"
+                              : "No payout account"
+                        }
+                      />
+                      <DetailField label="NIN" value={selectedDriver.nin_number || "—"} />
+                      <DetailField label="Licence number" value={selectedDriver.license_number || "—"} />
+                      <DetailField label="Licence expiry" value={formatDate(selectedDriver.license_expiry)} />
+                      <DetailField
+                        label="Emergency contact"
+                        value={selectedDriver.emergency_contact || "—"}
+                      />
+                    </div>
+
+                    <ImageGallery
+                      images={[
+                        { label: "Driver avatar", url: String(selectedDriver.avatar_url || "") },
+                        { label: "Vehicle photo", url: String(selectedDriver.vehicle?.vehicle_image_url || "") },
+                        { label: "Vehicle registration", url: String(selectedDriver.vehicle?.registration_photo_url || "") },
+                        { label: "Licence photo", url: String(selectedDriver.license_photo_url || "") },
+                        { label: "Licence selfie", url: String(selectedDriver.license_selfie_url || "") },
+                      ].filter((image) => image.url)}
+                    />
+
+                    <div className="detail-list-stack">
+                      <span className="detail-section-label">Recent rides</span>
+                      {(selectedDriver.recent_rides || []).length ? (
+                        (selectedDriver.recent_rides || []).map((ride: AnyRecord) => (
+                          <div className="detail-list-row" key={String(ride.id)}>
+                            <Stack
+                              subtitle={ride.destination_address || "Unknown destination"}
+                              tertiary={formatDateTime(ride.created_at)}
+                              title={ride.pickup_address || "Unknown pickup"}
+                            />
+                            <div className="tag-set">
+                              <Pill label={getRideTypeLabel(ride)} tone={ride.is_delivery ? "warning" : "info"} />
+                              <Pill label={ride.status || "unknown"} tone={renderTone(ride.status || "")} />
+                            </div>
+                          </div>
+                        ))
+                      ) : (
+                        <p className="detail-note">No recent rides recorded for this driver yet.</p>
+                      )}
+                    </div>
+                  </>
+                )}
+              </Subcard>
+            </div>
           )}
         </>
       )}
@@ -3033,80 +3694,190 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
           {loadingSections.customers && !customers.length ? (
             <LoadingCard message="Refreshing customers..." />
           ) : (
-            <Subcard eyebrow="Profiles + activity" title="Customer operations">
-              <DataTable
-                columns={[
-                  {
-                    label: "Customer",
-                    render: (customer) => (
-                      <Stack
-                        subtitle={customer.phone || "No phone"}
-                        tertiary={customer.email || "No email"}
-                        title={customer.full_name || "Unnamed customer"}
-                      />
-                    ),
-                  },
-                  {
-                    label: "Signals",
-                    render: (customer) => (
-                      <div className="stack">
-                        <div className="tag-set">
-                          <Pill
-                            label={customer.is_verified ? "Verified" : "Unverified"}
-                            tone={customer.is_verified ? "success" : "danger"}
-                          />
-                          <Pill
-                            label={`${String(customer.total_trips || 0)} trips`}
-                            tone="neutral"
-                          />
+            <div className="detail-layout">
+              <Subcard eyebrow="Profiles + activity" title="Customer operations">
+                <DataTable
+                  columns={[
+                    {
+                      label: "Customer",
+                      render: (customer) => (
+                        <Stack
+                          subtitle={customer.phone || "No phone"}
+                          tertiary={customer.email || "No email"}
+                          title={customer.full_name || "Unnamed customer"}
+                        />
+                      ),
+                    },
+                    {
+                      label: "Signals",
+                      render: (customer) => (
+                        <div className="stack">
+                          <div className="tag-set">
+                            <Pill
+                              label={customer.is_verified ? "Verified" : "Unverified"}
+                              tone={customer.is_verified ? "success" : "danger"}
+                            />
+                            <Pill
+                              label={`${String(customer.total_trips || 0)} trips`}
+                              tone="neutral"
+                            />
+                          </div>
+                          <span className="muted">
+                            Rating {String(customer.rating || "—")}
+                          </span>
                         </div>
-                        <span className="muted">
-                          Rating {String(customer.rating || "—")}
-                        </span>
-                      </div>
-                    ),
-                  },
-                  {
-                    label: "Current activity",
-                    render: (customer) => (
-                      <Stack
-                        subtitle={customer.active_ride?.status || customer.latest_ride?.status || "Idle"}
-                        title={
-                          customer.active_ride?.pickup_address ||
-                          customer.latest_ride?.pickup_address ||
-                          "No active ride"
-                        }
+                      ),
+                    },
+                    {
+                      label: "Current activity",
+                      render: (customer) => (
+                        <Stack
+                          subtitle={customer.active_ride?.status || customer.latest_ride?.status || "Idle"}
+                          title={
+                            customer.active_ride?.pickup_address ||
+                            customer.latest_ride?.pickup_address ||
+                            "No active ride"
+                          }
+                        />
+                      ),
+                    },
+                    {
+                      label: "Actions",
+                      render: (customer) =>
+                        canEditOperationalRecords ? (
+                          <div className="inline-actions">
+                            <button
+                              className="ghost-button"
+                              disabled={isActionPending(`customer-verify:${String(customer.id)}`)}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                void handleCustomerVerify(String(customer.id), !customer.is_verified);
+                              }}
+                              type="button"
+                            >
+                              {isActionPending(`customer-verify:${String(customer.id)}`)
+                                ? "Updating..."
+                                : customer.is_verified
+                                  ? "Mark unverified"
+                                  : "Mark verified"}
+                            </button>
+                          </div>
+                        ) : (
+                          <span className="muted">Click row to inspect</span>
+                        ),
+                    },
+                  ]}
+                  emptyMessage="No customers match the current search."
+                  isLoading={loadingSections.customers}
+                  loadingMessage="Refreshing customers..."
+                  onRowClick={(customer) => setSelectedCustomerId(String(customer.id))}
+                  rows={customers}
+                  selectedRowId={selectedCustomerId}
+                />
+              </Subcard>
+
+              <Subcard
+                eyebrow="Selected customer"
+                title={selectedCustomer ? selectedCustomer.full_name || "Customer record" : "Choose a customer"}
+              >
+                {!selectedCustomer ? (
+                  <EmptyState
+                    message="Click a customer row to inspect profile details, avatars, and their latest ride history."
+                    title="No customer selected"
+                  />
+                ) : (
+                  <>
+                    <IdentityCard
+                      avatarUrl={String(selectedCustomer.avatar_url || "")}
+                      subtitle={selectedCustomer.phone || "No phone"}
+                      tertiary={selectedCustomer.email || "No email"}
+                      title={selectedCustomer.full_name || "Unnamed customer"}
+                    />
+
+                    <div className="tag-set">
+                      <Pill
+                        label={selectedCustomer.is_verified ? "Verified" : "Unverified"}
+                        tone={selectedCustomer.is_verified ? "success" : "danger"}
                       />
-                    ),
-                  },
-                  {
-                    label: "Actions",
-                    render: (customer) => (
+                      <Pill
+                        label={`${String(selectedCustomer.total_trips || 0)} trips`}
+                        tone="neutral"
+                      />
+                    </div>
+
+                    {canEditOperationalRecords ? (
                       <div className="inline-actions">
                         <button
                           className="ghost-button"
-                          disabled={isActionPending(`customer-verify:${String(customer.id)}`)}
+                          disabled={isActionPending(`customer-verify:${String(selectedCustomer.id)}`)}
                           onClick={() =>
-                            void handleCustomerVerify(String(customer.id), !customer.is_verified)
+                            void handleCustomerVerify(
+                              String(selectedCustomer.id),
+                              !selectedCustomer.is_verified,
+                            )
                           }
                           type="button"
                         >
-                          {isActionPending(`customer-verify:${String(customer.id)}`)
-                            ? "Updating..."
-                            : customer.is_verified
-                              ? "Mark unverified"
-                              : "Mark verified"}
+                          {selectedCustomer.is_verified ? "Mark unverified" : "Mark verified"}
                         </button>
                       </div>
-                    ),
-                  },
-                ]}
-                emptyMessage="No customers match the current search."
-                isLoading={loadingSections.customers}
-                loadingMessage="Refreshing customers..."
-                rows={customers}
-              />
-            </Subcard>
+                    ) : null}
+
+                    <div className="detail-grid">
+                      <DetailField label="Gender" value={selectedCustomer.gender || "—"} />
+                      <DetailField label="Date of birth" value={formatDate(selectedCustomer.dob)} />
+                      <DetailField label="Rating" value={String(selectedCustomer.rating || "—")} />
+                      <DetailField
+                        label="Active ride"
+                        value={selectedCustomer.active_ride?.status || "Idle"}
+                      />
+                      <DetailField
+                        label="Latest route"
+                        value={
+                          selectedCustomer.latest_ride?.pickup_address ||
+                          selectedCustomer.active_ride?.pickup_address ||
+                          "—"
+                        }
+                      />
+                      <DetailField
+                        label="Latest payment"
+                        value={selectedCustomer.latest_ride?.payment_status || "—"}
+                      />
+                    </div>
+
+                    <ImageGallery
+                      images={[
+                        { label: "Customer avatar", url: String(selectedCustomer.avatar_url || "") },
+                      ].filter((image) => image.url)}
+                    />
+
+                    <div className="detail-list-stack">
+                      <span className="detail-section-label">Recent rides</span>
+                      {(selectedCustomer.recent_rides || []).length ? (
+                        (selectedCustomer.recent_rides || []).map((ride: AnyRecord) => (
+                          <div className="detail-list-row" key={String(ride.id)}>
+                            <Stack
+                              subtitle={ride.destination_address || "Unknown destination"}
+                              tertiary={formatDateTime(ride.created_at)}
+                              title={ride.pickup_address || "Unknown pickup"}
+                            />
+                            <div className="tag-set">
+                              <Pill label={ride.status || "unknown"} tone={renderTone(ride.status || "")} />
+                              <Pill
+                                label={ride.payment_status || "pending"}
+                                tone={renderTone(ride.payment_status || "")}
+                              />
+                            </div>
+                          </div>
+                        ))
+                      ) : (
+                        <p className="detail-note">No ride history recorded for this customer yet.</p>
+                      )}
+                    </div>
+                  </>
+                )}
+              </Subcard>
+            </div>
           )}
         </>
       )}
@@ -3759,6 +4530,7 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
   const renderSupportSection = () => (
     <PanelShell
       actions={
+        canBroadcastNotifications ? (
         <button
           className="primary-button"
           onClick={() => setSupportComposer("broadcast")}
@@ -3766,6 +4538,7 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
         >
           Send push notification
         </button>
+        ) : undefined
       }
       descriptor={sectionDescriptors.support}
       lastRefresh={lastRefresh.support}
@@ -3935,8 +4708,10 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
                     tone={loadingSections.support ? "warning" : "success"}
                   />
                   <p>
-                    Only rides with actual conversation activity appear here. Use the Broadcast
-                    button to reach wider audiences without leaving the desk.
+                    Only rides with actual conversation activity appear here.
+                    {canBroadcastNotifications
+                      ? " Use the Broadcast button to reach wider audiences without leaving the desk."
+                      : " Leadership accounts can still send broader push broadcasts when needed."}
                   </p>
                 </div>
               </div>
@@ -4139,9 +4914,19 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
               value={formatNumber(access.totals?.totalAccounts)}
             />
             <MetricCard
-              label="Admin accounts"
-              note="Operations and leadership access"
+              label="Super admins"
+              note="Highest-privilege operators"
+              value={formatNumber(access.totals?.superAdminAccounts)}
+            />
+            <MetricCard
+              label="Admins"
+              note="Leadership operators"
               value={formatNumber(access.totals?.adminAccounts)}
+            />
+            <MetricCard
+              label="Staff"
+              note="Operations-only accounts"
+              value={formatNumber(access.totals?.staffAccounts)}
             />
             <MetricCard
               label="Partner accounts"
@@ -4165,35 +4950,102 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
               }
             />
 
-            <form className="subcard" onSubmit={(event) => void submitCreateAdmin(event)}>
-              <div className="subcard-header">
-                <div>
-                  <span>Admins</span>
-                  <h4>Create a new admin</h4>
+            {canManageLeadershipAccounts ? (
+              <form className="subcard" onSubmit={(event) => void submitCreateAdmin(event)}>
+                <div className="subcard-header">
+                  <div>
+                    <span>Leadership</span>
+                    <h4>Create a leadership account</h4>
+                  </div>
+                  <button
+                    className="primary-button"
+                    disabled={isActionPending("create-admin")}
+                    type="submit"
+                  >
+                    {isActionPending("create-admin") ? "Creating..." : "Create account"}
+                  </button>
                 </div>
-                <button
-                  className="primary-button"
-                  disabled={isActionPending("create-admin")}
-                  type="submit"
-                >
-                  {isActionPending("create-admin") ? "Creating..." : "Create admin"}
-                </button>
-              </div>
-              <div className="form-grid">
-                <label>
-                  Display name
-                  <input name="displayName" placeholder="Operations lead" />
-                </label>
-                <label>
-                  Username
-                  <input autoCapitalize="none" autoCorrect="off" name="username" required />
-                </label>
-                <label>
-                  Temporary password
-                  <input minLength={12} name="password" required type="password" />
-                </label>
-              </div>
-            </form>
+                <div className="form-grid">
+                  <label>
+                    Level
+                    <select
+                      name="role"
+                      onChange={(event) =>
+                        setLeadershipRole(event.target.value as "admin" | "super_admin")
+                      }
+                      value={leadershipRole}
+                    >
+                      <option value="admin">Admin</option>
+                      <option value="super_admin">Super admin</option>
+                    </select>
+                  </label>
+                  <label>
+                    Display name
+                    <input name="displayName" placeholder="Operations lead" />
+                  </label>
+                  <label>
+                    Username
+                    <input autoCapitalize="none" autoCorrect="off" name="username" required />
+                  </label>
+                  <label>
+                    Temporary password
+                    <input minLength={12} name="password" required type="password" />
+                  </label>
+                </div>
+              </form>
+            ) : null}
+
+            {canManageStaffAccounts ? (
+              <form className="subcard" onSubmit={(event) => void submitCreateStaff(event)}>
+                <div className="subcard-header">
+                  <div>
+                    <span>Staff</span>
+                    <h4>Add operations staff</h4>
+                  </div>
+                  <button
+                    className="primary-button"
+                    disabled={isActionPending("create-staff")}
+                    type="submit"
+                  >
+                    {isActionPending("create-staff") ? "Adding..." : "Add staff"}
+                  </button>
+                </div>
+                <div className="form-grid">
+                  <label>
+                    Role title
+                    <select
+                      name="rolePreset"
+                      onChange={(event) => setStaffRolePreset(event.target.value)}
+                      value={staffRolePreset}
+                    >
+                      {staffRolePresetOptions.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  {staffRolePreset === "custom" ? (
+                    <label>
+                      Custom title
+                      <input name="customRoleTitle" placeholder="Customer Rep" required />
+                    </label>
+                  ) : null}
+                  <label>
+                    Display name
+                    <input name="displayName" placeholder="Support desk" />
+                  </label>
+                  <label>
+                    Username
+                    <input autoCapitalize="none" autoCorrect="off" name="username" required />
+                  </label>
+                  <label>
+                    Temporary password
+                    <input minLength={12} name="password" required type="password" />
+                  </label>
+                </div>
+              </form>
+            ) : null}
 
             <form className="subcard" onSubmit={(event) => void submitCreatePartnerAccess(event)}>
               <div className="subcard-header">
@@ -4250,6 +5102,27 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
                 </label>
               </div>
             </form>
+
+            <div className="subcard">
+              <div className="subcard-header">
+                <div>
+                  <span>Visibility</span>
+                  <h4>Role-based privacy</h4>
+                </div>
+                <Pill label={currentRoleLabel} tone="success" />
+              </div>
+              <div className="detail-list-stack">
+                <p className="detail-note">
+                  Staff accounts can work operations, rides, customers, drivers, scheduled trips,
+                  and support, but they do not receive driver government IDs, payout details,
+                  wallet balances, or internal margin data.
+                </p>
+                <p className="detail-note">
+                  Leadership accounts keep full visibility and can add or remove staff. Only super
+                  admins can create new leadership accounts.
+                </p>
+              </div>
+            </div>
           </div>
 
           <Subcard eyebrow="Directory" title="Account inventory">
@@ -4268,12 +5141,20 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
                 {
                   label: "Role",
                   render: (accountRow) => (
-                    <div className="tag-set">
-                      <Pill label={accountRow.role} tone={renderTone(accountRow.role || "")} />
-                      <Pill
-                        label={accountRow.is_active === false ? "Inactive" : "Active"}
-                        tone={accountRow.is_active === false ? "danger" : "success"}
-                      />
+                    <div className="stack">
+                      <div className="tag-set">
+                        <Pill
+                          label={getRoleLabel(accountRow.role, accountRow.role_title)}
+                          tone={renderTone(accountRow.role || "")}
+                        />
+                        <Pill
+                          label={accountRow.is_active === false ? "Inactive" : "Active"}
+                          tone={accountRow.is_active === false ? "danger" : "success"}
+                        />
+                      </div>
+                      <span className="muted">
+                        System role: {String(accountRow.role || "unknown").replaceAll("_", " ")}
+                      </span>
                     </div>
                   ),
                 },
@@ -4303,21 +5184,47 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
                   label: "Actions",
                   render: (accountRow) => (
                     <div className="inline-actions">
-                      <button
-                        className="ghost-button"
-                        disabled={isActionPending(`account-reset:${String(accountRow.id)}`)}
-                        onClick={() =>
-                          void handleAccountPasswordReset(
-                            String(accountRow.id),
-                            String(accountRow.username || "account"),
-                          )
-                        }
-                        type="button"
-                      >
-                        {isActionPending(`account-reset:${String(accountRow.id)}`)
-                          ? "Resetting..."
-                          : "Set temporary password"}
-                      </button>
+                      {canResetManagedAccountPassword(accountRow) ? (
+                        <button
+                          className="ghost-button"
+                          disabled={isActionPending(`account-reset:${String(accountRow.id)}`)}
+                          onClick={() =>
+                            void handleAccountPasswordReset(
+                              String(accountRow.id),
+                              String(accountRow.username || "account"),
+                            )
+                          }
+                          type="button"
+                        >
+                          {isActionPending(`account-reset:${String(accountRow.id)}`)
+                            ? "Resetting..."
+                            : "Set temporary password"}
+                        </button>
+                      ) : null}
+                      {canToggleManagedAccount(accountRow) ? (
+                        <button
+                          className={accountRow.is_active === false ? "success-button" : "danger-button"}
+                          disabled={isActionPending(`account-status:${String(accountRow.id)}`)}
+                          onClick={() =>
+                            void handleAccountStatusToggle(
+                              String(accountRow.id),
+                              accountRow.is_active !== false,
+                              String(accountRow.display_name || accountRow.username || "staff account"),
+                            )
+                          }
+                          type="button"
+                        >
+                          {isActionPending(`account-status:${String(accountRow.id)}`)
+                            ? "Saving..."
+                            : accountRow.is_active === false
+                              ? "Reactivate staff"
+                              : "Deactivate staff"}
+                        </button>
+                      ) : null}
+                      {!canResetManagedAccountPassword(accountRow) &&
+                      !canToggleManagedAccount(accountRow) ? (
+                        <span className="muted">Protected account</span>
+                      ) : null}
                     </div>
                   ),
                 },
@@ -5114,7 +6021,9 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
               <p className="sidebar-copy">
                 {session?.role === "partner"
                   ? "Track attributed rides, commissions, payouts, and your portal access from one place."
-                  : "Operate rides, dispatch, finance, partners, and trust workflows from one production control surface."}
+                  : session?.role === "staff"
+                    ? "Work live operations, riders, drivers, scheduled trips, and support from one focused operations surface."
+                    : "Operate rides, dispatch, finance, partners, and trust workflows from one production control surface."}
               </p>
             </div>
 
@@ -5127,6 +6036,9 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
                   ? `${session.displayName} (${session.username})`
                   : session?.username || "Signed in"}
               </p>
+              {session && session.role !== "partner" ? (
+                <p className="sidebar-meta">{currentRoleLabel}</p>
+              ) : null}
               <p className="sidebar-meta">
                 {lastRefresh[activeSection]
                   ? `Last synced ${lastRefresh[activeSection]}`
@@ -5154,16 +6066,16 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
             </nav>
 
             <div className="section-actions">
-              {session?.role === "admin" ? (
+              {isLeadershipSession ? (
                 <button
                   className="primary-button wide-button"
                   onClick={() => handleSectionSelect("access")}
                   type="button"
                 >
-                  Manage admins and passwords
+                  Manage team access
                 </button>
               ) : null}
-              {session?.role === "admin" ? (
+              {isLeadershipSession ? (
                 <button
                   className="ghost-button wide-button"
                   onClick={() => handleSectionSelect("partners")}

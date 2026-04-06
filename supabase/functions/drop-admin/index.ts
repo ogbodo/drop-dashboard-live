@@ -62,8 +62,10 @@ type DashboardActionName =
   | "update_cancel_reason"
   | "create_cancel_reason"
   | "create_admin"
+  | "create_staff"
   | "create_partner_access"
   | "reset_password"
+  | "toggle_account_status"
   | "send_support_reply"
   | "mark_support_thread_seen";
 
@@ -81,7 +83,7 @@ type DashboardSectionName =
   | "access"
   | "workspace";
 
-type DashboardRole = "admin" | "partner";
+type DashboardRole = "super_admin" | "admin" | "staff" | "partner";
 
 type DashboardSession = {
   accountId?: string | null;
@@ -92,6 +94,7 @@ type DashboardSession = {
   nonce: string;
   partnerId?: string | null;
   role: DashboardRole;
+  roleTitle?: string | null;
   username: string;
 };
 
@@ -107,6 +110,7 @@ type DashboardAccount = {
   password_hash: string;
   password_updated_at?: string | null;
   role: DashboardRole;
+  role_title?: string | null;
   updated_at?: string;
   username: string;
 };
@@ -151,7 +155,7 @@ const globalStore = globalThis as typeof globalThis & {
 const rateLimitStore = globalStore.__dropDashboardRateLimit__ ?? new Map();
 globalStore.__dropDashboardRateLimit__ = rateLimitStore;
 
-const adminSections = new Set<DashboardSectionName>([
+const leadershipSections = new Set<DashboardSectionName>([
   "overview",
   "live-ops",
   "rides",
@@ -164,13 +168,39 @@ const adminSections = new Set<DashboardSectionName>([
   "settings",
   "access",
 ]);
+const staffSections = new Set<DashboardSectionName>([
+  "overview",
+  "live-ops",
+  "rides",
+  "drivers",
+  "customers",
+  "scheduled-rides",
+  "support",
+]);
 const partnerSections = new Set<DashboardSectionName>(["workspace"]);
+const leadershipRoles = new Set<DashboardRole>(["super_admin", "admin"]);
+const teamRoles = new Set<DashboardRole>(["super_admin", "admin", "staff"]);
 
 const errorWithStatus = (message: string, status: number, payload?: unknown) => {
   const error = new Error(message) as JsonError;
   error.status = status;
   error.payload = payload;
   return error;
+};
+
+const defaultRoleTitle = (role: DashboardRole) => {
+  switch (role) {
+    case "super_admin":
+      return "Super admin";
+    case "admin":
+      return "Admin";
+    case "staff":
+      return "Staff";
+    case "partner":
+      return "Partner";
+    default:
+      return "Team account";
+  }
 };
 
 const jsonSuccess = (data: unknown, status = 200) =>
@@ -281,6 +311,7 @@ const sanitizeAccount = (account: DashboardAccount | null) =>
         partnerId: account.partner_id || null,
         passwordUpdatedAt: account.password_updated_at || null,
         role: account.role,
+        roleTitle: account.role_title || defaultRoleTitle(account.role),
         updatedAt: account.updated_at || null,
         username: account.username,
       }
@@ -293,7 +324,11 @@ const toSessionIdentity = (
   accountId: account?.id || fallback?.id || null,
   displayName: account?.display_name || fallback?.display_name || null,
   partnerId: account?.partner_id || fallback?.partner_id || null,
-  role: (account?.role || fallback?.role || "admin") as DashboardRole,
+  role: (account?.role || fallback?.role || "super_admin") as DashboardRole,
+  roleTitle:
+    account?.role_title ||
+    fallback?.role_title ||
+    defaultRoleTitle((account?.role || fallback?.role || "super_admin") as DashboardRole),
   username:
     account?.username ||
     normalizeUsername(String(fallback?.username || env.dashboardAdminUsername || "")),
@@ -304,7 +339,7 @@ const getDashboardAccountByUsername = async (username: string) => {
     return (await supabaseAdmin.selectOne<DashboardAccount>("dashboard_accounts", {
       is_active: "eq.true",
       select:
-        "id,username,display_name,role,partner_id,password_hash,is_active,last_login_at,password_updated_at,created_at,updated_at,created_by,metadata",
+        "id,username,display_name,role,role_title,partner_id,password_hash,is_active,last_login_at,password_updated_at,created_at,updated_at,created_by,metadata",
       username: `eq.${username}`,
     })) as DashboardAccount | null;
   } catch (error) {
@@ -320,7 +355,7 @@ const getDashboardAccountById = async (accountId: string) => {
     return (await supabaseAdmin.selectOne<DashboardAccount>("dashboard_accounts", {
       id: `eq.${accountId}`,
       select:
-        "id,username,display_name,role,partner_id,password_hash,is_active,last_login_at,password_updated_at,created_at,updated_at,created_by,metadata",
+        "id,username,display_name,role,role_title,partner_id,password_hash,is_active,last_login_at,password_updated_at,created_at,updated_at,created_by,metadata",
     })) as DashboardAccount | null;
   } catch (error) {
     if (isDashboardAccountsError(error)) {
@@ -341,7 +376,7 @@ const updateDashboardAccount = async (accountId: string, payload: AnyRecord) => 
       {
         id: `eq.${accountId}`,
         select:
-          "id,username,display_name,role,partner_id,password_hash,is_active,last_login_at,password_updated_at,created_at,updated_at,created_by,metadata",
+          "id,username,display_name,role,role_title,partner_id,password_hash,is_active,last_login_at,password_updated_at,created_at,updated_at,created_by,metadata",
       },
     );
 
@@ -393,7 +428,8 @@ const ensureBootstrapAdminAccount = async () => {
       },
       partner_id: null,
       password_hash: env.dashboardAdminPasswordHash,
-      role: "admin",
+      role: "super_admin",
+      role_title: "Super admin",
       username,
     });
 
@@ -448,6 +484,7 @@ const createAuthenticatedSession = async (
     expiresAt: session.expiresAt,
     partnerId: identity.partnerId,
     role: identity.role,
+    roleTitle: identity.roleTitle,
     sessionToken: session.token,
     username: identity.username,
   });
@@ -489,23 +526,88 @@ const requireRole = (session: DashboardSession, role: DashboardRole) => {
   }
 };
 
-const requireAdmin = (session: DashboardSession) => requireRole(session, "admin");
+const requireAnyRole = (
+  session: DashboardSession,
+  roles: DashboardRole[],
+  message = "You do not have permission for that action.",
+) => {
+  if (!roles.includes(session.role)) {
+    throw errorWithStatus(message, 403);
+  }
+};
+
+const requireLeadership = (session: DashboardSession) =>
+  requireAnyRole(session, ["super_admin", "admin"]);
+const requireSuperAdmin = (session: DashboardSession) => requireRole(session, "super_admin");
+const requireTeamOperator = (session: DashboardSession) =>
+  requireAnyRole(session, ["super_admin", "admin", "staff"]);
 const requirePartner = (session: DashboardSession) => requireRole(session, "partner");
+
+const isBootstrapAccount = (account: DashboardAccount | null) =>
+  Boolean(account?.metadata && account.metadata.bootstrap);
+
+const assertCanResetAccountPassword = (
+  session: DashboardSession,
+  targetAccount: DashboardAccount,
+) => {
+  if (session.role === "super_admin") {
+    return;
+  }
+
+  if (
+    session.role === "admin" &&
+    (targetAccount.role === "staff" || targetAccount.role === "partner")
+  ) {
+    return;
+  }
+
+  throw errorWithStatus("You do not have permission to reset that account password.", 403);
+};
+
+const assertCanToggleAccountStatus = (
+  session: DashboardSession,
+  targetAccount: DashboardAccount,
+) => {
+  if (targetAccount.id === session.accountId) {
+    throw errorWithStatus("You cannot deactivate the account you are currently using.", 400);
+  }
+
+  if (isBootstrapAccount(targetAccount)) {
+    throw errorWithStatus("The bootstrap super admin account cannot be deactivated.", 403);
+  }
+
+  if (session.role === "super_admin") {
+    return;
+  }
+
+  if (session.role === "admin" && targetAccount.role === "staff") {
+    return;
+  }
+
+  throw errorWithStatus("You do not have permission to change this account status.", 403);
+};
 
 const adminSectionHandlers: Record<
   Exclude<DashboardSectionName, "workspace">,
   (request: Request, session: DashboardSession) => Promise<unknown>
 > = {
-  access: async () => getAccessData(supabaseAdmin),
-  customers: async (request) =>
+  access: async (_request, session) =>
+    getAccessData(supabaseAdmin, {
+      viewerRole: session.role,
+    }),
+  customers: async (request, session) =>
     getCustomersData(supabaseAdmin, {
       limit: new URL(request.url).searchParams.get("limit"),
       search: new URL(request.url).searchParams.get("search"),
+    }, {
+      viewerRole: session.role,
     }),
-  drivers: async (request) =>
+  drivers: async (request, session) =>
     getDriversData(supabaseAdmin, {
       limit: new URL(request.url).searchParams.get("limit"),
       search: new URL(request.url).searchParams.get("search"),
+    }, {
+      viewerRole: session.role,
     }),
   finance: async () => getFinanceData(supabaseAdmin),
   "live-ops": async () => getLiveOpsData(supabaseAdmin),
@@ -515,13 +617,16 @@ const adminSectionHandlers: Record<
       limit: new URL(request.url).searchParams.get("limit"),
       search: new URL(request.url).searchParams.get("search"),
     }),
-  rides: async (request) =>
+  rides: async (request, session) =>
     getRidesData(supabaseAdmin, {
       limit: new URL(request.url).searchParams.get("limit"),
       paymentStatus: new URL(request.url).searchParams.get("paymentStatus"),
       search: new URL(request.url).searchParams.get("search"),
       serviceTypeId: new URL(request.url).searchParams.get("serviceTypeId"),
       status: new URL(request.url).searchParams.get("status"),
+      tripType: new URL(request.url).searchParams.get("tripType"),
+    }, {
+      viewerRole: session.role,
     }),
   "scheduled-rides": async (request) =>
     getScheduledRidesData(supabaseAdmin, {
@@ -580,7 +685,8 @@ const handleLogin = async (request: Request) => {
     display_name: "Drop Team Admin",
     id: bootstrapAccount?.id || null,
     partner_id: null,
-    role: "admin",
+    role: "super_admin",
+    role_title: "Super admin",
     username: bootstrapUsername,
   });
 };
@@ -595,6 +701,7 @@ const handleSession = async (request: Request) => {
     expiresAt: session.exp,
     partnerId: session.partnerId || null,
     role: session.role,
+    roleTitle: session.roleTitle || defaultRoleTitle(session.role),
     username: session.username,
   });
 };
@@ -603,9 +710,24 @@ const handleSection = async (request: Request, section: string) => {
   const session = await requireSession(request);
   const normalizedSection = section as DashboardSectionName;
 
-  if (session.role === "admin") {
-    if (!adminSections.has(normalizedSection)) {
+  if (leadershipRoles.has(session.role)) {
+    if (!leadershipSections.has(normalizedSection)) {
       throw errorWithStatus("Unknown dashboard section.", 404);
+    }
+
+    const handler = adminSectionHandlers[normalizedSection as Exclude<
+      DashboardSectionName,
+      "workspace"
+    >];
+    return jsonSuccess(await handler(request, session));
+  }
+
+  if (session.role === "staff") {
+    if (!staffSections.has(normalizedSection)) {
+      throw errorWithStatus(
+        "Staff accounts only have access to operations, rides, drivers, customers, scheduled rides, and support.",
+        403,
+      );
     }
 
     const handler = adminSectionHandlers[normalizedSection as Exclude<
@@ -635,12 +757,15 @@ const handleSection = async (request: Request, section: string) => {
 };
 
 const createAdminAccount = async (session: DashboardSession, payload: AnyRecord) => {
-  requireAdmin(session);
+  requireSuperAdmin(session);
   await ensureAccountStorageReady();
 
+  const requestedRole = String(payload.role || "admin");
+  const role = (requestedRole === "super_admin" ? "super_admin" : "admin") as DashboardRole;
   const username = normalizeUsername(String(payload.username || ""));
   const password = String(payload.password || "");
   const displayName = String(payload.displayName || "").trim();
+  const roleTitle = String(payload.roleTitle || "").trim() || defaultRoleTitle(role);
 
   if (!username || !password) {
     throw errorWithStatus("Username and password are required.", 400);
@@ -660,7 +785,44 @@ const createAdminAccount = async (session: DashboardSession, payload: AnyRecord)
     },
     partner_id: null,
     password_hash: passwordHash,
-    role: "admin",
+    role,
+    role_title: roleTitle,
+    username,
+  });
+
+  return sanitizeAccount((rows[0] as DashboardAccount | undefined) ?? null);
+};
+
+const createStaffAccount = async (session: DashboardSession, payload: AnyRecord) => {
+  requireLeadership(session);
+  await ensureAccountStorageReady();
+
+  const username = normalizeUsername(String(payload.username || ""));
+  const password = String(payload.password || "");
+  const displayName = String(payload.displayName || "").trim();
+  const roleTitle = String(payload.roleTitle || "").trim() || "Staff";
+
+  if (!username || !password) {
+    throw errorWithStatus("Username and password are required.", 400);
+  }
+
+  const existing = await getDashboardAccountByUsername(username);
+  if (existing) {
+    throw errorWithStatus("That username is already in use.", 409);
+  }
+
+  const passwordHash = await hashPassword(password);
+  const rows = await supabaseAdmin.insert<DashboardAccount>("dashboard_accounts", {
+    created_by: session.accountId || null,
+    display_name: displayName || null,
+    metadata: {
+      createdByRole: session.role,
+      invitedBy: session.username,
+    },
+    partner_id: null,
+    password_hash: passwordHash,
+    role: "staff",
+    role_title: roleTitle,
     username,
   });
 
@@ -671,7 +833,7 @@ const createPartnerAccessAccount = async (
   session: DashboardSession,
   payload: AnyRecord,
 ) => {
-  requireAdmin(session);
+  requireLeadership(session);
   await ensureAccountStorageReady();
 
   const partnerId = String(payload.partnerId || "");
@@ -703,7 +865,7 @@ const createPartnerAccessAccount = async (
       partner_id: `eq.${partnerId}`,
       role: "eq.partner",
       select:
-        "id,username,display_name,role,partner_id,password_hash,is_active,last_login_at,password_updated_at,created_at,updated_at,created_by,metadata",
+        "id,username,display_name,role,role_title,partner_id,password_hash,is_active,last_login_at,password_updated_at,created_at,updated_at,created_by,metadata",
     },
   );
 
@@ -716,12 +878,13 @@ const createPartnerAccessAccount = async (
     created_by: session.accountId || null,
     display_name: displayName || partner.contact_name || partner.name || null,
     metadata: {
-      createdByRole: "admin",
+      createdByRole: session.role,
       partnerName: partner.name,
     },
     partner_id: partnerId,
     password_hash: passwordHash,
     role: "partner",
+    role_title: "Partner",
     username,
   });
 
@@ -742,12 +905,12 @@ const resetPassword = async (session: DashboardSession, payload: AnyRecord) => {
       : null;
 
   if (targetAccountId) {
-    requireAdmin(session);
-
     const targetAccount = await getDashboardAccountById(targetAccountId);
     if (!targetAccount) {
       throw errorWithStatus("Target account not found.", 404);
     }
+
+    assertCanResetAccountPassword(session, targetAccount);
 
     const updated = await updateDashboardAccount(targetAccount.id, {
       password_hash: await hashPassword(newPassword),
@@ -767,7 +930,7 @@ const resetPassword = async (session: DashboardSession, payload: AnyRecord) => {
       ? await getDashboardAccountById(String(session.accountId))
       : null;
 
-  if (!account && session.role === "admin") {
+  if (!account && leadershipRoles.has(session.role)) {
     const bootstrapUsername = normalizeUsername(env.dashboardAdminUsername);
     if (
       session.username === bootstrapUsername &&
@@ -798,6 +961,34 @@ const resetPassword = async (session: DashboardSession, payload: AnyRecord) => {
   return sanitizeAccount(updated);
 };
 
+const toggleAccountStatus = async (
+  session: DashboardSession,
+  payload: AnyRecord,
+) => {
+  await ensureAccountStorageReady();
+
+  const accountId = String(payload.accountId || "");
+  if (!accountId) {
+    throw errorWithStatus("An account id is required.", 400);
+  }
+
+  const targetAccount = await getDashboardAccountById(accountId);
+  if (!targetAccount) {
+    throw errorWithStatus("Target account not found.", 404);
+  }
+
+  assertCanToggleAccountStatus(session, targetAccount);
+
+  const isActive =
+    payload.isActive === undefined ? targetAccount.is_active === false : Boolean(payload.isActive);
+
+  const updated = await updateDashboardAccount(targetAccount.id, {
+    is_active: isActive,
+  });
+
+  return sanitizeAccount(updated);
+};
+
 const handleAction = async (request: Request) => {
   enforceRateLimit(request, "edge-admin-actions", 120, 1000 * 60);
   const session = await requireSession(request, { requireCsrf: true });
@@ -808,8 +999,12 @@ const handleAction = async (request: Request) => {
       return jsonSuccess(await resetPassword(session, payload));
     case "create_admin":
       return jsonSuccess(await createAdminAccount(session, payload));
+    case "create_staff":
+      return jsonSuccess(await createStaffAccount(session, payload));
     case "create_partner_access":
       return jsonSuccess(await createPartnerAccessAccount(session, payload));
+    case "toggle_account_status":
+      return jsonSuccess(await toggleAccountStatus(session, payload));
     case "mark_support_thread_seen":
       return jsonSuccess(
         await markSupportThreadSeen(
@@ -820,15 +1015,15 @@ const handleAction = async (request: Request) => {
         ),
       );
     case "send_support_reply":
-      requireAdmin(session);
+      requireTeamOperator(session);
       return jsonSuccess(await sendSupportReply(supabaseAdmin, session, payload));
     case "cancel_ride":
-      requireAdmin(session);
+      requireLeadership(session);
       return jsonSuccess(
         await cancelRideAsAdmin(supabaseAdmin, String(payload.rideId || ""), payload),
       );
     case "update_ride_follow_up":
-      requireAdmin(session);
+      requireLeadership(session);
       return jsonSuccess(
         await updateRideFollowUp(
           supabaseAdmin,
@@ -837,17 +1032,17 @@ const handleAction = async (request: Request) => {
         ),
       );
     case "update_driver":
-      requireAdmin(session);
+      requireLeadership(session);
       return jsonSuccess(
         await updateDriver(supabaseAdmin, String(payload.driverId || ""), payload),
       );
     case "update_customer":
-      requireAdmin(session);
+      requireLeadership(session);
       return jsonSuccess(
         await updateCustomer(supabaseAdmin, String(payload.customerId || ""), payload),
       );
     case "cancel_scheduled_ride":
-      requireAdmin(session);
+      requireLeadership(session);
       return jsonSuccess(
         await cancelScheduledRideAsAdmin(
           supabaseAdmin,
@@ -855,10 +1050,10 @@ const handleAction = async (request: Request) => {
         ),
       );
     case "create_partner":
-      requireAdmin(session);
+      requireLeadership(session);
       return jsonSuccess(await createPartner(supabaseAdmin, payload));
     case "update_partner":
-      requireAdmin(session);
+      requireLeadership(session);
       return jsonSuccess(
         await updatePartner(supabaseAdmin, String(payload.partnerId || ""), payload),
       );
@@ -871,7 +1066,7 @@ const handleAction = async (request: Request) => {
         await updatePartnerBranding(supabaseAdmin, String(session.partnerId), payload),
       );
     case "update_partner_commission":
-      requireAdmin(session);
+      requireLeadership(session);
       return jsonSuccess(
         await updatePartnerCommission(
           supabaseAdmin,
@@ -880,25 +1075,25 @@ const handleAction = async (request: Request) => {
         ),
       );
     case "update_report":
-      requireAdmin(session);
+      requireTeamOperator(session);
       return jsonSuccess(
         await updateReport(supabaseAdmin, String(payload.reportId || ""), payload),
       );
     case "send_push_notification":
-      requireAdmin(session);
+      requireLeadership(session);
       return jsonSuccess(await sendPushNotification(supabaseAdmin, payload));
     case "update_app_config":
-      requireAdmin(session);
+      requireLeadership(session);
       return jsonSuccess(
         await updateAppConfig(supabaseAdmin, String(payload.key || ""), payload),
       );
     case "update_dispatch_settings":
-      requireAdmin(session);
+      requireLeadership(session);
       return jsonSuccess(
         await updateDispatchSettings(supabaseAdmin, dashboardConfig, payload),
       );
     case "update_service_type":
-      requireAdmin(session);
+      requireLeadership(session);
       return jsonSuccess(
         await updateServiceType(
           supabaseAdmin,
@@ -907,10 +1102,10 @@ const handleAction = async (request: Request) => {
         ),
       );
     case "create_service_type":
-      requireAdmin(session);
+      requireLeadership(session);
       return jsonSuccess(await createServiceType(supabaseAdmin, payload));
     case "update_cancel_reason":
-      requireAdmin(session);
+      requireLeadership(session);
       return jsonSuccess(
         await updateCancelReason(
           supabaseAdmin,
@@ -919,7 +1114,7 @@ const handleAction = async (request: Request) => {
         ),
       );
     case "create_cancel_reason":
-      requireAdmin(session);
+      requireLeadership(session);
       return jsonSuccess(await createCancelReason(supabaseAdmin, payload));
     default:
       throw errorWithStatus("Unsupported admin action.", 400);

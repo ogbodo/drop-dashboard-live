@@ -30,7 +30,8 @@ export async function GET(request: NextRequest) {
       displayName?: string | null;
       expiresAt: number;
       partnerId?: string | null;
-      role: "admin" | "partner";
+      role: "super_admin" | "admin" | "staff" | "partner";
+      roleTitle?: string | null;
       username: string;
     }>("auth/session", {
       headers: {
@@ -46,6 +47,7 @@ export async function GET(request: NextRequest) {
       expiresAt: session.expiresAt,
       partnerId: session.partnerId ?? null,
       role: session.role,
+      roleTitle: session.roleTitle ?? null,
       username: session.username,
     });
   } catch (error) {
