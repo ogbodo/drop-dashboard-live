@@ -425,6 +425,25 @@ const formatDuration = (value: unknown) => {
 
 const getRideTypeLabel = (ride: AnyRecord) => (ride?.is_delivery ? "Delivery" : "Ride");
 
+const getAirportTripLabel = (ride: AnyRecord) => {
+  const hasPickupAirport = Boolean(ride?.airport_pickup_zone_code || ride?.airport_pickup_zone_name);
+  const hasDropoffAirport = Boolean(ride?.airport_dropoff_zone_code || ride?.airport_dropoff_zone_name);
+
+  if (hasPickupAirport && hasDropoffAirport) {
+    return "Airport to airport";
+  }
+
+  if (hasPickupAirport) {
+    return "Airport pickup";
+  }
+
+  if (hasDropoffAirport) {
+    return "Airport dropoff";
+  }
+
+  return ride?.is_airport_trip ? "Airport trip" : "";
+};
+
 const getDeliveryImageUrl = (ride: AnyRecord) => {
   const fromPayload = String(ride?.delivery_item_info?.image || "").trim();
   const direct = String(ride?.item_image_url || "").trim();
@@ -473,6 +492,18 @@ const rememberSection = (section: SectionKey) => {
   } catch {
     // Ignore storage failures in private mode.
   }
+};
+
+const parseJsonInput = (
+  value: FormDataEntryValue | null,
+  fallback: unknown,
+) => {
+  const rawValue = String(value || "").trim();
+  if (!rawValue) {
+    return fallback;
+  }
+
+  return JSON.parse(rawValue);
 };
 
 const isEditingField = () => {
@@ -2054,7 +2085,18 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
   async function submitHybridConfig(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    const serviceFeeBands = JSON.parse(String(form.get("service_fee_bands") || "[]"));
+    let serviceFeeBands: unknown[] = [];
+
+    try {
+      serviceFeeBands = parseJsonInput(form.get("service_fee_bands"), []) as unknown[];
+    } catch {
+      notify(
+        "Invalid JSON",
+        "Service fee bands must be valid JSON before they can be saved.",
+        "error",
+      );
+      return;
+    }
 
     await runConfirmedAction(
       "config-hybrid-finance",
@@ -2086,6 +2128,136 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
           ["overview", "finance", "settings"],
         );
         notify("Finance saved", "Hybrid finance settings were updated.", "success");
+      },
+    );
+  }
+
+  async function submitTripBillingConfig(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+
+    await runConfirmedAction(
+      "config-trip-billing",
+      {
+        confirmLabel: "Save trip billing",
+        message:
+          "These rules control the wait timer shown to customers, the real grace windows, and every flat waiting surcharge across rides and deliveries.",
+        title: "Save wait-time billing rules?",
+        tone: "primary",
+      },
+      async () => {
+        await submitAppConfig(
+          "trip_billing_settings",
+          "Trip billing rules for wait timers, grace windows, and flat waiting surcharges.",
+          {
+            customer_visible_wait_timer_minutes: Number(
+              form.get("customer_visible_wait_timer_minutes") || 7,
+            ),
+            pickup_wait_grace_minutes: Number(
+              form.get("pickup_wait_grace_minutes") || 10,
+            ),
+            delivery_wait_charge_grace_minutes: Number(
+              form.get("delivery_wait_charge_grace_minutes") || 10,
+            ),
+            wait_fee_interval_minutes: Number(
+              form.get("wait_fee_interval_minutes") || 5,
+            ),
+            wait_fee_amount: Number(form.get("wait_fee_amount") || 10),
+            delivery_wait_fee_interval_minutes: Number(
+              form.get("delivery_wait_fee_interval_minutes") || 5,
+            ),
+            delivery_wait_fee_amount: Number(
+              form.get("delivery_wait_fee_amount") || 10,
+            ),
+            allow_price_reduction:
+              String(form.get("allow_price_reduction")) === "true",
+            charge_only_when_customer_not_ready:
+              String(form.get("charge_only_when_customer_not_ready")) !== "false",
+            charge_for_traffic:
+              String(form.get("charge_for_traffic")) === "true",
+            charge_for_driver_delay:
+              String(form.get("charge_for_driver_delay")) === "true",
+            charge_for_route_delay:
+              String(form.get("charge_for_route_delay")) === "true",
+          },
+          ["overview", "rides", "scheduled-rides", "settings"],
+        );
+        notify(
+          "Trip billing saved",
+          "Wait-time timers and surcharge rules were updated.",
+          "success",
+        );
+      },
+    );
+  }
+
+  async function submitAirportConfig(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    let zones: unknown[] = [];
+
+    try {
+      zones = parseJsonInput(form.get("zones"), []) as unknown[];
+    } catch {
+      notify(
+        "Invalid JSON",
+        "Airport zones must be valid JSON before they can be saved.",
+        "error",
+      );
+      return;
+    }
+
+    await runConfirmedAction(
+      "config-airport-pricing",
+      {
+        confirmLabel: "Save airport pricing",
+        message:
+          "These settings control airport pickup fees, reservation fees, included wait time, and the airport zones used in booking and dispatch.",
+        title: "Save airport trip settings?",
+        tone: "primary",
+      },
+      async () => {
+        await submitAppConfig(
+          "airport_trip_settings",
+          "Airport ride pricing and reservation settings controlled centrally by the platform.",
+          {
+            enabled: String(form.get("enabled")) !== "false",
+            reservation_enabled:
+              String(form.get("reservation_enabled")) !== "false",
+            enforce_in_app_price_only:
+              String(form.get("enforce_in_app_price_only")) !== "false",
+            default_pickup_access_fee_amount: Number(
+              form.get("default_pickup_access_fee_amount") || 0,
+            ),
+            default_pickup_convenience_fee_amount: Number(
+              form.get("default_pickup_convenience_fee_amount") || 0,
+            ),
+            default_dropoff_fee_amount: Number(
+              form.get("default_dropoff_fee_amount") || 0,
+            ),
+            default_reservation_fee_amount: Number(
+              form.get("default_reservation_fee_amount") || 1200,
+            ),
+            default_reservation_dispatch_lead_minutes: Number(
+              form.get("default_reservation_dispatch_lead_minutes") || 45,
+            ),
+            default_reservation_included_wait_minutes: Number(
+              form.get("default_reservation_included_wait_minutes") || 30,
+            ),
+            default_reservation_min_lead_minutes: Number(
+              form.get("default_reservation_min_lead_minutes") || 30,
+            ),
+            policy_copy: String(form.get("policy_copy") || "").trim(),
+            reservation_copy: String(form.get("reservation_copy") || "").trim(),
+            zones,
+          },
+          ["overview", "rides", "scheduled-rides", "settings"],
+        );
+        notify(
+          "Airport pricing saved",
+          "Airport fees and reservation rules were updated.",
+          "success",
+        );
       },
     );
   }
@@ -3125,6 +3297,9 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
                       render: (ride) => (
                         <div className="tag-set">
                           <Pill label={getRideTypeLabel(ride)} tone={ride.is_delivery ? "warning" : "info"} />
+                          {ride.is_airport_trip ? (
+                            <Pill label={getAirportTripLabel(ride)} tone="warning" />
+                          ) : null}
                           <Pill label={ride.status || "unknown"} tone={renderTone(ride.status || "")} />
                           <Pill
                             label={ride.payment_status || "pending"}
@@ -3210,6 +3385,9 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
 
                     <div className="tag-set">
                       <Pill label={getRideTypeLabel(selectedRide)} tone={selectedRide.is_delivery ? "warning" : "info"} />
+                      {selectedRide.is_airport_trip ? (
+                        <Pill label={getAirportTripLabel(selectedRide)} tone="warning" />
+                      ) : null}
                       <Pill label={selectedRide.status || "unknown"} tone={renderTone(selectedRide.status || "")} />
                       <Pill
                         label={selectedRide.payment_status || "pending"}
@@ -3227,9 +3405,27 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
                       </div>
                     ) : null}
 
+                    {selectedRide.is_airport_trip ? (
+                      <div className="detail-note-card">
+                        <strong>Airport pricing policy</strong>
+                        <p>
+                          Airport trips must follow the in-app price only. Drivers should not
+                          request separate airport cash outside the platform.
+                        </p>
+                      </div>
+                    ) : null}
+
                     <div className="detail-grid">
                       <DetailField label="Pickup" value={selectedRide.pickup_address || "—"} />
                       <DetailField label="Dropoff" value={selectedRide.destination_address || "—"} />
+                      <DetailField
+                        label="Airport pickup zone"
+                        value={selectedRide.airport_pickup_zone_name || "—"}
+                      />
+                      <DetailField
+                        label="Airport dropoff zone"
+                        value={selectedRide.airport_dropoff_zone_name || "—"}
+                      />
                       <DetailField label="Driver fare" value={formatCurrency(selectedRide.price)} />
                       <DetailField
                         label="Customer charge"
@@ -3254,6 +3450,10 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
                             ? formatCurrency(selectedRide.quoted_price_amount)
                             : "—"
                         }
+                      />
+                      <DetailField
+                        label="Airport surcharge"
+                        value={formatCurrency(selectedRide.airport_surcharge_amount)}
                       />
                       <DetailField label="Payment mode" value={selectedRide.paymentMode || "—"} />
                       <DetailField
@@ -5243,6 +5443,9 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
   const renderSettingsSection = () => {
     const driverMonthlyFee = getAppConfigValue("driver_monthly_fee");
     const hybridConfig = getAppConfigValue("hybrid_finance_settings");
+    const tripBillingConfig = getAppConfigValue("trip_billing_settings");
+    const airportConfig = getAppConfigValue("airport_trip_settings");
+    const airportZones = Array.isArray(airportConfig.zones) ? airportConfig.zones : [];
 
     return (
       <PanelShell descriptor={sectionDescriptors.settings} lastRefresh={lastRefresh.settings}>
@@ -5482,6 +5685,330 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
                     />
                   </label>
                 </div>
+              </form>
+
+              <form className="subcard" onSubmit={(event) => void submitTripBillingConfig(event)}>
+                <div className="subcard-header">
+                  <div>
+                    <span>Pricing rules</span>
+                    <h4>Wait-time billing</h4>
+                  </div>
+                  <button
+                    className="primary-button"
+                    disabled={isActionPending("config-trip-billing")}
+                    type="submit"
+                  >
+                    {isActionPending("config-trip-billing")
+                      ? "Saving..."
+                      : "Save wait-time rules"}
+                  </button>
+                </div>
+                <div className="form-grid">
+                  <label>
+                    Customer timer shown (mins)
+                    <input
+                      defaultValue={String(
+                        tripBillingConfig.customer_visible_wait_timer_minutes ?? 7,
+                      )}
+                      min="1"
+                      name="customer_visible_wait_timer_minutes"
+                      type="number"
+                    />
+                  </label>
+                  <label>
+                    Ride pickup grace (mins)
+                    <input
+                      defaultValue={String(
+                        tripBillingConfig.pickup_wait_grace_minutes ?? 10,
+                      )}
+                      min="0"
+                      name="pickup_wait_grace_minutes"
+                      type="number"
+                    />
+                  </label>
+                  <label>
+                    Delivery code grace (mins)
+                    <input
+                      defaultValue={String(
+                        tripBillingConfig.delivery_wait_charge_grace_minutes ?? 10,
+                      )}
+                      min="0"
+                      name="delivery_wait_charge_grace_minutes"
+                      type="number"
+                    />
+                  </label>
+                  <label>
+                    Wait fee interval (mins)
+                    <input
+                      defaultValue={String(
+                        tripBillingConfig.wait_fee_interval_minutes ?? 5,
+                      )}
+                      min="1"
+                      name="wait_fee_interval_minutes"
+                      type="number"
+                    />
+                  </label>
+                  <label>
+                    Wait fee amount
+                    <input
+                      defaultValue={String(tripBillingConfig.wait_fee_amount ?? 10)}
+                      min="0"
+                      name="wait_fee_amount"
+                      type="number"
+                    />
+                  </label>
+                  <label>
+                    Delivery wait interval (mins)
+                    <input
+                      defaultValue={String(
+                        tripBillingConfig.delivery_wait_fee_interval_minutes ??
+                          tripBillingConfig.wait_fee_interval_minutes ??
+                          5,
+                      )}
+                      min="1"
+                      name="delivery_wait_fee_interval_minutes"
+                      type="number"
+                    />
+                  </label>
+                  <label>
+                    Delivery wait fee amount
+                    <input
+                      defaultValue={String(
+                        tripBillingConfig.delivery_wait_fee_amount ??
+                          tripBillingConfig.wait_fee_amount ??
+                          10,
+                      )}
+                      min="0"
+                      name="delivery_wait_fee_amount"
+                      type="number"
+                    />
+                  </label>
+                  <label>
+                    Charge only when customer is not ready
+                    <select
+                      defaultValue={String(
+                        tripBillingConfig.charge_only_when_customer_not_ready ?? true,
+                      )}
+                      name="charge_only_when_customer_not_ready"
+                    >
+                      <option value="true">true</option>
+                      <option value="false">false</option>
+                    </select>
+                  </label>
+                  <label>
+                    Charge for traffic
+                    <select
+                      defaultValue={String(tripBillingConfig.charge_for_traffic ?? false)}
+                      name="charge_for_traffic"
+                    >
+                      <option value="false">false</option>
+                      <option value="true">true</option>
+                    </select>
+                  </label>
+                  <label>
+                    Charge for driver delay
+                    <select
+                      defaultValue={String(
+                        tripBillingConfig.charge_for_driver_delay ?? false,
+                      )}
+                      name="charge_for_driver_delay"
+                    >
+                      <option value="false">false</option>
+                      <option value="true">true</option>
+                    </select>
+                  </label>
+                  <label>
+                    Charge for route delay
+                    <select
+                      defaultValue={String(
+                        tripBillingConfig.charge_for_route_delay ?? false,
+                      )}
+                      name="charge_for_route_delay"
+                    >
+                      <option value="false">false</option>
+                      <option value="true">true</option>
+                    </select>
+                  </label>
+                  <label>
+                    Allow price reduction
+                    <select
+                      defaultValue={String(
+                        tripBillingConfig.allow_price_reduction ?? false,
+                      )}
+                      name="allow_price_reduction"
+                    >
+                      <option value="false">false</option>
+                      <option value="true">true</option>
+                    </select>
+                  </label>
+                </div>
+              </form>
+
+              <form className="subcard" onSubmit={(event) => void submitAirportConfig(event)}>
+                <div className="subcard-header">
+                  <div>
+                    <span>Airport reservations</span>
+                    <h4>Airport trip pricing</h4>
+                  </div>
+                  <button
+                    className="primary-button"
+                    disabled={isActionPending("config-airport-pricing")}
+                    type="submit"
+                  >
+                    {isActionPending("config-airport-pricing")
+                      ? "Saving..."
+                      : "Save airport pricing"}
+                  </button>
+                </div>
+                <div className="form-grid">
+                  <label>
+                    Airport pricing enabled
+                    <select
+                      defaultValue={String(airportConfig.enabled ?? true)}
+                      name="enabled"
+                    >
+                      <option value="true">true</option>
+                      <option value="false">false</option>
+                    </select>
+                  </label>
+                  <label>
+                    Reservation enabled
+                    <select
+                      defaultValue={String(airportConfig.reservation_enabled ?? true)}
+                      name="reservation_enabled"
+                    >
+                      <option value="true">true</option>
+                      <option value="false">false</option>
+                    </select>
+                  </label>
+                  <label>
+                    Enforce in-app price only
+                    <select
+                      defaultValue={String(
+                        airportConfig.enforce_in_app_price_only ?? true,
+                      )}
+                      name="enforce_in_app_price_only"
+                    >
+                      <option value="true">true</option>
+                      <option value="false">false</option>
+                    </select>
+                  </label>
+                  <label>
+                    Default pickup access fee
+                    <input
+                      defaultValue={String(
+                        airportConfig.default_pickup_access_fee_amount ?? 0,
+                      )}
+                      min="0"
+                      name="default_pickup_access_fee_amount"
+                      type="number"
+                    />
+                  </label>
+                  <label>
+                    Default pickup convenience fee
+                    <input
+                      defaultValue={String(
+                        airportConfig.default_pickup_convenience_fee_amount ?? 0,
+                      )}
+                      min="0"
+                      name="default_pickup_convenience_fee_amount"
+                      type="number"
+                    />
+                  </label>
+                  <label>
+                    Default dropoff fee
+                    <input
+                      defaultValue={String(
+                        airportConfig.default_dropoff_fee_amount ?? 0,
+                      )}
+                      min="0"
+                      name="default_dropoff_fee_amount"
+                      type="number"
+                    />
+                  </label>
+                  <label>
+                    Default reservation fee
+                    <input
+                      defaultValue={String(
+                        airportConfig.default_reservation_fee_amount ?? 1200,
+                      )}
+                      min="0"
+                      name="default_reservation_fee_amount"
+                      type="number"
+                    />
+                  </label>
+                  <label>
+                    Reservation dispatch lead (mins)
+                    <input
+                      defaultValue={String(
+                        airportConfig.default_reservation_dispatch_lead_minutes ?? 45,
+                      )}
+                      min="5"
+                      name="default_reservation_dispatch_lead_minutes"
+                      type="number"
+                    />
+                  </label>
+                  <label>
+                    Reservation included wait (mins)
+                    <input
+                      defaultValue={String(
+                        airportConfig.default_reservation_included_wait_minutes ?? 30,
+                      )}
+                      min="0"
+                      name="default_reservation_included_wait_minutes"
+                      type="number"
+                    />
+                  </label>
+                  <label>
+                    Reservation minimum lead (mins)
+                    <input
+                      defaultValue={String(
+                        airportConfig.default_reservation_min_lead_minutes ?? 30,
+                      )}
+                      min="5"
+                      name="default_reservation_min_lead_minutes"
+                      type="number"
+                    />
+                  </label>
+                  <label>
+                    Airport policy copy
+                    <textarea
+                      defaultValue={String(airportConfig.policy_copy || "")}
+                      name="policy_copy"
+                    />
+                  </label>
+                  <label>
+                    Reservation copy
+                    <textarea
+                      defaultValue={String(airportConfig.reservation_copy || "")}
+                      name="reservation_copy"
+                    />
+                  </label>
+                  <label>
+                    Airport zones JSON
+                    <textarea
+                      defaultValue={JSON.stringify(airportZones, null, 2)}
+                      name="zones"
+                    />
+                  </label>
+                </div>
+                {airportZones.length ? (
+                  <div className="details-grid">
+                    {airportZones.map((zone: AnyRecord) => (
+                      <MetricCard
+                        key={String(zone.code || zone.name || zone.city || "airport-zone")}
+                        label={String(zone.city || zone.code || "Airport")}
+                        value={`${formatCurrency(
+                          Number(zone.pickup_access_fee_amount || 0) +
+                            Number(zone.pickup_convenience_fee_amount || 0),
+                        )} pickup`}
+                        note={`Reserve +${formatCurrency(
+                          Number(zone.reservation_fee_amount || 0),
+                        )} | Lead ${String(zone.reservation_dispatch_lead_minutes || 0)} mins | Wait ${String(zone.reservation_included_wait_minutes || 0)} mins`}
+                      />
+                    ))}
+                  </div>
+                ) : null}
               </form>
             </div>
 
