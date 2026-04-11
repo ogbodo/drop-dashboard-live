@@ -4,6 +4,7 @@ import {
   FormEvent,
   MouseEvent,
   ReactNode,
+  isValidElement,
   useEffect,
   useEffectEvent,
   useRef,
@@ -334,6 +335,58 @@ const maskAccountNumber = (value: unknown) => {
   }
 
   return `Acct ••••${digits.slice(-4)}`;
+};
+
+const formatDetailText = (value: unknown): string => {
+  if (value === null || value === undefined) {
+    return "—";
+  }
+
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed || "—";
+  }
+
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+
+  if (Array.isArray(value)) {
+    const entries = value
+      .map((entry) => formatDetailText(entry))
+      .filter((entry) => entry !== "—");
+
+    return entries.length ? entries.join(", ") : "—";
+  }
+
+  if (typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    const preferredFields = ["name", "full_name", "phone", "relationship", "email", "address"];
+    const preferredValues = preferredFields
+      .map((field) => record[field])
+      .map((entry) => formatDetailText(entry))
+      .filter((entry) => entry !== "—");
+
+    if (preferredValues.length) {
+      return preferredValues.join(" • ");
+    }
+
+    const fallbackEntries = Object.entries(record)
+      .map(([key, entry]) => {
+        const formattedValue = formatDetailText(entry);
+        if (formattedValue === "—") {
+          return null;
+        }
+
+        return `${key.replace(/_/g, " ")}: ${formattedValue}`;
+      })
+      .filter(Boolean)
+      .slice(0, 4) as string[];
+
+    return fallbackEntries.length ? fallbackEntries.join(" • ") : "—";
+  }
+
+  return String(value);
 };
 
 const renderTone = (value: string) => {
@@ -819,12 +872,12 @@ function DetailField({
   value,
 }: {
   label: string;
-  value: ReactNode;
+  value: unknown;
 }) {
   return (
     <div className="detail-field">
       <span>{label}</span>
-      <strong>{value}</strong>
+      <strong>{isValidElement(value) ? value : formatDetailText(value)}</strong>
     </div>
   );
 }
@@ -3637,7 +3690,7 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
                         canReviewDriverDocuments ? (
                           <div className="inline-actions">
                             <button
-                              className="ghost-button"
+                              className="success-button"
                               disabled={
                                 isActionPending(`driver:is_verified:${String(driver.id)}`) ||
                                 isActionPending(`driver:has_paid:${String(driver.id)}`)
@@ -3733,7 +3786,7 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
                     {canReviewDriverDocuments ? (
                       <div className="inline-actions">
                         <button
-                          className="ghost-button"
+                          className="success-button"
                           disabled={
                             isActionPending(`driver:is_verified:${String(selectedDriver.id)}`) ||
                             isActionPending(`driver:has_paid:${String(selectedDriver.id)}`)
@@ -3947,7 +4000,7 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
                         canEditOperationalRecords ? (
                           <div className="inline-actions">
                             <button
-                              className="ghost-button"
+                              className="success-button"
                               disabled={isActionPending(`customer-verify:${String(customer.id)}`)}
                               onClick={(event) => {
                                 event.stopPropagation();
@@ -4008,7 +4061,7 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
                     {canEditOperationalRecords ? (
                       <div className="inline-actions">
                         <button
-                          className="ghost-button"
+                          className="success-button"
                           disabled={isActionPending(`customer-verify:${String(selectedCustomer.id)}`)}
                           onClick={() =>
                             void handleCustomerVerify(
