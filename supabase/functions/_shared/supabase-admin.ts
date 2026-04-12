@@ -54,15 +54,18 @@ export const createSupabaseAdmin = (
   supabaseUrl: string,
   supabaseServiceRoleKey: string,
 ) => {
+  const normalizedSupabaseUrl = supabaseUrl.replace(/\/+$/, "");
+  const storageBaseUrl = `${normalizedSupabaseUrl}/storage/v1`;
+
   const request = async <T = unknown>(
     pathname: string,
     options: RequestOptions = {},
   ): Promise<{ data: T; response: Response }> => {
-    if (!supabaseUrl || !supabaseServiceRoleKey) {
+    if (!normalizedSupabaseUrl || !supabaseServiceRoleKey) {
       throw new Error("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be configured.");
     }
 
-    const url = new URL(pathname, supabaseUrl);
+    const url = new URL(pathname, normalizedSupabaseUrl);
     appendParams(url, options.params || {});
 
     const headers: Record<string, string> = {
@@ -200,6 +203,8 @@ export const createSupabaseAdmin = (
       });
       return Array.isArray(data) ? data : [];
     },
+    storageBaseUrl,
+    supabaseUrl: normalizedSupabaseUrl,
   };
 
   return admin;
