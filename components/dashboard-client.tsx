@@ -3256,6 +3256,56 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
             />
           </Subcard>
 
+          <Subcard eyebrow="Support shortcuts" title="Verification & trip codes">
+            <DataTable
+              columns={[
+                {
+                  label: "Trip",
+                  render: (ride) => (
+                    <Stack
+                      subtitle={ride.customer?.full_name || "No customer"}
+                      tertiary={ride.id}
+                      title={ride.pickup_address || "Unknown pickup"}
+                    />
+                  ),
+                },
+                {
+                  label: "Type",
+                  render: (ride) => (
+                    <div className="tag-set">
+                      <Pill
+                        label={getRideTypeLabel(ride)}
+                        tone={ride.is_delivery ? "warning" : "info"}
+                      />
+                      <Pill
+                        label={ride.status || "unknown"}
+                        tone={renderTone(ride.status || "")}
+                      />
+                    </div>
+                  ),
+                },
+                {
+                  label: "Pickup code",
+                  render: (ride) => (
+                    <strong className="inline-code-value">
+                      {String(ride.pickup_code || "—")}
+                    </strong>
+                  ),
+                },
+                {
+                  label: "Dropoff code",
+                  render: (ride) => (
+                    <strong className="inline-code-value">
+                      {String(ride.dropoff_code || "—")}
+                    </strong>
+                  ),
+                },
+              ]}
+              emptyMessage="No active rides or deliveries are generating trip codes right now. As soon as a trip becomes active, its pickup and dropoff codes will show here."
+              rows={liveOps.activeRides || []}
+            />
+          </Subcard>
+
           <Subcard eyebrow="Availability" title="Online drivers">
             <DataTable
               columns={[
