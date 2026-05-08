@@ -476,6 +476,19 @@ const formatDuration = (value: unknown) => {
   return `${minutes}m`;
 };
 
+const isOtpActive = (otp: AnyRecord | null | undefined) => {
+  const expiresAt = otp?.expires_at ? new Date(String(otp.expires_at)).getTime() : 0;
+  return Boolean(expiresAt && expiresAt > Date.now());
+};
+
+const getOtpStatusLabel = (otp: AnyRecord | null | undefined) => {
+  if (!otp?.code) {
+    return "No OTP";
+  }
+
+  return isOtpActive(otp) ? "Active" : "Expired";
+};
+
 const getRideTypeLabel = (ride: AnyRecord) => (ride?.is_delivery ? "Delivery" : "Ride");
 
 const getAirportTripLabel = (ride: AnyRecord) => {
@@ -596,6 +609,97 @@ const matchesVisibleSectionSignal = (
 
 function Pill({ label, tone }: { label: string; tone?: string }) {
   return <span className={`pill ${tone || "neutral"}`}>{label}</span>;
+}
+
+function CodeCard({
+  code,
+  hint,
+  label,
+  tone,
+}: {
+  code?: unknown;
+  hint?: string;
+  label: string;
+  tone?: string;
+}) {
+  const displayCode = String(code || "").trim() || "—";
+
+  return (
+    <div className="code-card">
+      <div className="code-card-head">
+        <span>{label}</span>
+        {hint ? <Pill label={hint} tone={tone} /> : null}
+      </div>
+      <strong className="code-card-value">{displayCode}</strong>
+    </div>
+  );
+}
+
+function VerificationCodesCard({ ride }: { ride: AnyRecord }) {
+  const rideTypeLabel = getRideTypeLabel(ride);
+
+  return (
+    <div className="detail-note-card">
+      <strong>{rideTypeLabel} verification codes</strong>
+      <p>These sync live from the trip record so support can confirm the exact pickup and dropoff codes in use.</p>
+      <div className="verification-grid">
+        <CodeCard
+          code={ride?.pickup_code}
+          hint="Pickup"
+          label="Pickup code"
+          tone="info"
+        />
+        <CodeCard
+          code={ride?.dropoff_code}
+          hint="Dropoff"
+          label="Dropoff code"
+          tone="warning"
+        />
+      </div>
+    </div>
+  );
+}
+
+function OtpSnapshotCard({
+  otp,
+  phone,
+  title,
+}: {
+  otp?: AnyRecord | null;
+  phone?: unknown;
+  title: string;
+}) {
+  if (!otp?.code) {
+    return (
+      <div className="detail-note-card">
+        <strong>{title}</strong>
+        <p>No recent verification OTP is available for this phone right now.</p>
+      </div>
+    );
+  }
+
+  const active = isOtpActive(otp);
+
+  return (
+    <div className="detail-note-card">
+      <strong>{title}</strong>
+      <div className="verification-grid">
+        <CodeCard
+          code={otp.code}
+          hint={getOtpStatusLabel(otp)}
+          label="Latest OTP"
+          tone={active ? "success" : "danger"}
+        />
+        <div className="detail-field">
+          <span>Delivery</span>
+          <strong>{String(phone || otp.phone || "—")}</strong>
+          <p className="detail-note">
+            Sent {formatDateTime(otp.created_at)} • Expires {formatDateTime(otp.expires_at)}
+          </p>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function MetricCard({
@@ -1496,6 +1600,51 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
       void supabase.removeChannel(channel);
     };
   }, [activeSection, session]);
+
+  useEffect(() => {
+    if (!session || !["customers", "drivers", "live-ops", "rides"].includes(activeSection)) {
+      return;
+    }
+
+    const supabase = getSupabaseBrowserClient();
+    if (!supabase) {
+      return;
+    }
+
+    const channel = supabase
+      .channel(
+        `dashboard-verification-codes:${session.accountId || session.username}:${activeSection}`,
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "otp_verifications",
+        },
+        () => {
+          if (activeSection === "customers" || activeSection === "drivers" || activeSection === "live-ops") {
+            queueSignalRefresh();
+          }
+        },
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "rides",
+        },
+        () => {
+          queueSignalRefresh();
+        },
+      )
+      .subscribe();
+
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [activeSection, queueSignalRefresh, session]);
 
   async function adminAction(action: DashboardActionName, payload: AnyRecord) {
     const response = await fetch("/api/admin/actions", {
@@ -3060,6 +3209,21 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
                   ),
                 },
                 {
+                  label: "Codes",
+                  render: (ride) => (
+                    <div className="inline-code-stack">
+                      <span className="inline-code-label">PU</span>
+                      <strong className="inline-code-value">
+                        {String(ride.pickup_code || "—")}
+                      </strong>
+                      <span className="inline-code-label">DO</span>
+                      <strong className="inline-code-value">
+                        {String(ride.dropoff_code || "—")}
+                      </strong>
+                    </div>
+                  ),
+                },
+                {
                   label: "Actions",
                   render: (ride) => (
                     <div className="inline-actions">
@@ -3214,6 +3378,47 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
               emptyMessage="No scheduled rides are pending."
               rows={liveOps.scheduledRides || []}
             />
+          </Subcard>
+
+          <Subcard eyebrow="Trust + verification" title="Recent OTPs">
+            {!isLeadershipSession ? (
+              <div className="detail-note-card">
+                <strong>Restricted for staff accounts</strong>
+                <p>Live OTP visibility is limited to admin and super admin sessions.</p>
+              </div>
+            ) : (
+              <DataTable
+                columns={[
+                  {
+                    label: "OTP",
+                    render: (otp) => (
+                      <div className="inline-code-stack">
+                        <strong className="inline-code-value">{String(otp.code || "—")}</strong>
+                        <Pill
+                          label={getOtpStatusLabel(otp)}
+                          tone={isOtpActive(otp) ? "success" : "danger"}
+                        />
+                      </div>
+                    ),
+                  },
+                  {
+                    label: "Phone",
+                    render: (otp) => (
+                      <Stack
+                        subtitle={`Expires ${formatDateTime(otp.expires_at)}`}
+                        title={String(otp.phone || "No phone")}
+                      />
+                    ),
+                  },
+                  {
+                    label: "Created",
+                    render: (otp) => <span>{formatDateTime(otp.created_at)}</span>,
+                  },
+                ]}
+                emptyMessage="No recent OTP activity is available right now."
+                rows={liveOps.recentOtps || []}
+              />
+            )}
           </Subcard>
         </div>
       )}
@@ -3468,6 +3673,8 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
                       </div>
                     ) : null}
 
+                    <VerificationCodesCard ride={selectedRide} />
+
                     <div className="detail-grid">
                       <DetailField label="Pickup" value={selectedRide.pickup_address || "—"} />
                       <DetailField label="Dropoff" value={selectedRide.destination_address || "—"} />
@@ -3520,8 +3727,6 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
                       <DetailField label="Created" value={formatDateTime(selectedRide.created_at)} />
                       <DetailField label="Accepted" value={formatDateTime(selectedRide.accepted_at)} />
                       <DetailField label="Completed" value={formatDateTime(selectedRide.completed_at)} />
-                      <DetailField label="Pickup code" value={selectedRide.pickup_code || "—"} />
-                      <DetailField label="Dropoff code" value={selectedRide.dropoff_code || "—"} />
                       <DetailField
                         label="Trip duration"
                         value={formatDuration(selectedRide.actual_trip_seconds)}
@@ -3781,6 +3986,14 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
                       <div className="detail-note-card">
                         Government IDs, verification documents, wallet balances, and payout details are hidden for staff accounts.
                       </div>
+                    ) : null}
+
+                    {canReviewDriverDocuments ? (
+                      <OtpSnapshotCard
+                        otp={selectedDriver.latest_otp}
+                        phone={selectedDriver.phone}
+                        title="Latest driver OTP"
+                      />
                     ) : null}
 
                     {canReviewDriverDocuments ? (
@@ -4057,6 +4270,14 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
                         tone="neutral"
                       />
                     </div>
+
+                    {canEditOperationalRecords ? (
+                      <OtpSnapshotCard
+                        otp={selectedCustomer.latest_otp}
+                        phone={selectedCustomer.phone}
+                        title="Latest customer OTP"
+                      />
+                    ) : null}
 
                     {canEditOperationalRecords ? (
                       <div className="inline-actions">

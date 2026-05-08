@@ -610,7 +610,10 @@ const adminSectionHandlers: Record<
       viewerRole: session.role,
     }),
   finance: async () => getFinanceData(supabaseAdmin),
-  "live-ops": async () => getLiveOpsData(supabaseAdmin),
+  "live-ops": async (_request, session) =>
+    getLiveOpsData(supabaseAdmin, {
+      viewerRole: session.role,
+    }),
   overview: async () => getOverviewData(supabaseAdmin, dashboardConfig),
   partners: async (request) =>
     getPartnersData(supabaseAdmin, {
