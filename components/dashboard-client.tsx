@@ -1601,51 +1601,6 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
     };
   }, [activeSection, session]);
 
-  useEffect(() => {
-    if (!session || !["customers", "drivers", "live-ops", "rides"].includes(activeSection)) {
-      return;
-    }
-
-    const supabase = getSupabaseBrowserClient();
-    if (!supabase) {
-      return;
-    }
-
-    const channel = supabase
-      .channel(
-        `dashboard-verification-codes:${session.accountId || session.username}:${activeSection}`,
-      )
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "otp_verifications",
-        },
-        () => {
-          if (activeSection === "customers" || activeSection === "drivers" || activeSection === "live-ops") {
-            queueSignalRefresh();
-          }
-        },
-      )
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "rides",
-        },
-        () => {
-          queueSignalRefresh();
-        },
-      )
-      .subscribe();
-
-    return () => {
-      void supabase.removeChannel(channel);
-    };
-  }, [activeSection, queueSignalRefresh, session]);
-
   async function adminAction(action: DashboardActionName, payload: AnyRecord) {
     const response = await fetch("/api/admin/actions", {
       body: JSON.stringify({ action, payload }),
