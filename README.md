@@ -20,6 +20,8 @@ All privileged secrets live in the Supabase Edge Function layer:
 
 - `SUPABASE_SERVICE_ROLE_KEY`
 - `DISPATCH_ADMIN_TOKEN`
+- `FLUTTERWAVE_SECRET_KEY`
+- `FLUTTERWAVE_SECRET_HASH`
 - `DASHBOARD_ADMIN_USERNAME`
 - `DASHBOARD_ADMIN_PASSWORD_HASH`
 - `DASHBOARD_SESSION_SECRET`
@@ -106,11 +108,30 @@ Required secrets:
 SUPABASE_URL=...
 SUPABASE_SERVICE_ROLE_KEY=...
 DISPATCH_ADMIN_TOKEN=...
+FLUTTERWAVE_SECRET_KEY=...
+FLUTTERWAVE_SECRET_HASH=...
+# Optional; defaults to Flutterwave v3 API
+FLUTTERWAVE_BASE_URL=https://api.flutterwave.com/v3
 
 DASHBOARD_ADMIN_USERNAME=drop-admin
 DASHBOARD_ADMIN_PASSWORD_HASH=...
 DASHBOARD_SESSION_SECRET=...
 ```
+
+Configure Flutterwave webhooks to post to the Supabase webhook function:
+
+```bash
+https://<supabase-project-ref>.supabase.co/functions/v1/flutterwave-webhook
+```
+
+If you prefer the dashboard to proxy webhooks into the admin edge function, use:
+
+```bash
+https://<dashboard-domain>/api/webhooks/flutterwave
+```
+
+Use the same value for Flutterwave's secret hash and the edge function
+`FLUTTERWAVE_SECRET_HASH`.
 
 Generate a password hash with:
 

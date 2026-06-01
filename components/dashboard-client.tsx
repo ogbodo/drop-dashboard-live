@@ -214,6 +214,35 @@ const formatCurrency = (value: unknown) =>
 const formatNumber = (value: unknown) =>
   new Intl.NumberFormat("en-US").format(Number(value || 0));
 
+const formatMoney = (value: unknown, currency: unknown = "NGN") => {
+  const currencyCode = String(currency || "NGN").toUpperCase();
+  const amount = Number(value || 0);
+
+  try {
+    return new Intl.NumberFormat("en-NG", {
+      currency: currencyCode,
+      maximumFractionDigits: Number.isInteger(amount) ? 0 : 2,
+      style: "currency",
+    }).format(amount);
+  } catch {
+    return `${currencyCode} ${formatNumber(amount)}`;
+  }
+};
+
+const formatMoneyBreakdown = (value: unknown) => {
+  if (!value || typeof value !== "object") {
+    return "—";
+  }
+
+  const entries = Object.entries(value as Record<string, unknown>).filter(
+    ([, amount]) => Number(amount || 0) > 0,
+  );
+
+  return entries.length
+    ? entries.map(([currency, amount]) => formatMoney(amount, currency)).join(" • ")
+    : "—";
+};
+
 const formatDateTime = (value: unknown) => {
   if (!value) {
     return "—";
@@ -401,6 +430,7 @@ const renderTone = (value: string) => {
       "paid",
       "resolved",
       "success",
+      "successful",
       "verified",
       "true",
     ].includes(value)
@@ -424,7 +454,18 @@ const renderTone = (value: string) => {
     return "warning";
   }
 
-  if (["cancelled", "danger", "failed", "inactive", "paused", "pending_verification"].includes(value)) {
+  if (
+    [
+      "cancelled",
+      "danger",
+      "failed",
+      "inactive",
+      "paused",
+      "pending_verification",
+      "refunded",
+      "reversed",
+    ].includes(value)
+  ) {
     return "danger";
   }
 
@@ -4484,7 +4525,11 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
     </PanelShell>
   );
 
-  const renderFinanceSection = () => (
+  const renderFinanceSection = () => {
+    const flutterwaveReport = (finance?.flutterwaveTransactions || {}) as AnyRecord;
+    const flutterwaveWarnings = (flutterwaveReport.warnings || []) as string[];
+
+    return (
     <PanelShell descriptor={sectionDescriptors.finance} lastRefresh={lastRefresh.finance}>
       {loadingSections.finance && !finance ? (
         <LoadingCard message="Loading finance..." />
@@ -4523,6 +4568,204 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
           </div>
 
           <div className="finance-stack">
+            <Subcard eyebrow="Flutterwave" title="Transaction status report">
+              {!flutterwaveReport.configured ? (
+                <p className="support-card-note">
+                  Set FLUTTERWAVE_SECRET_KEY on the drop-admin edge function to load
+                  Flutterwave transaction statuses.
+                </p>
+              ) : !flutterwaveReport.available ? (
+                <p className="support-card-note">
+                  Flutterwave transactions could not be loaded:{" "}
+                  {flutterwaveReport.error || "unknown provider error"}.
+                </p>
+              ) : (
+                <div className="finance-report-stack">
+                  <div className="alert-list">
+                    <div className="alert-row">
+                      <strong>Report window</strong>
+                      <span>
+                        {formatDate(flutterwaveReport.from)} to{" "}
+                        {formatDate(flutterwaveReport.to)}
+                      </span>
+                    </div>
+                    <div className="alert-row">
+                      <strong>Provider rows</strong>
+                      <span>{formatNumber(flutterwaveReport.total_provider_count)}</span>
+                    </div>
+                    <div className="alert-row">
+                      <strong>Loaded rows</strong>
+                      <span>
+                        {formatNumber(flutterwaveReport.loaded_count)}
+                        {flutterwaveReport.has_more ? " shown so far" : ""}
+                      </span>
+                    </div>
+                  </div>
+
+                  {flutterwaveWarnings.length ? (
+                    <p className="support-card-note">
+                      {flutterwaveWarnings.join(" ")}
+                    </p>
+                  ) : null}
+
+                  <DataTable
+                    columns={[
+                      {
+                        label: "Status",
+                        render: (summary) => (
+                          <Pill
+                            label={summary.status || "unknown"}
+                            tone={renderTone(String(summary.status || ""))}
+                          />
+                        ),
+                      },
+                      {
+                        label: "Provider count",
+                        render: (summary) => (
+                          <Stack
+                            subtitle={`${formatNumber(summary.loaded_count)} loaded`}
+                            title={formatNumber(summary.provider_count)}
+                          />
+                        ),
+                      },
+                      {
+                        label: "Charged value",
+                        render: (summary) => (
+                          <span>{formatMoneyBreakdown(summary.amounts_by_currency)}</span>
+                        ),
+                      },
+                      {
+                        label: "Settled value",
+                        render: (summary) => (
+                          <span>{formatMoneyBreakdown(summary.settled_by_currency)}</span>
+                        ),
+                      },
+                    ]}
+                    emptyMessage="Flutterwave returned no transaction status rows for this window."
+                    isLoading={loadingSections.finance}
+                    loadingMessage="Refreshing Flutterwave status report..."
+                    rows={flutterwaveReport.status_summary || []}
+                  />
+
+                  <DataTable
+                    columns={[
+                      {
+                        label: "Transaction",
+                        render: (transaction) => (
+                          <Stack
+                            subtitle={transaction.flw_ref || "No Flutterwave ref"}
+                            tertiary={transaction.tx_ref || String(transaction.transaction_id || "")}
+                            title={formatMoney(
+                              transaction.charged_amount || transaction.amount,
+                              transaction.currency,
+                            )}
+                          />
+                        ),
+                      },
+                      {
+                        label: "Customer",
+                        render: (transaction) => (
+                          <Stack
+                            subtitle={transaction.customer_email || transaction.customer_phone || "No contact"}
+                            title={transaction.customer_name || "Unknown customer"}
+                          />
+                        ),
+                      },
+                      {
+                        label: "Status",
+                        render: (transaction) => (
+                          <Pill
+                            label={transaction.status || "unknown"}
+                            tone={renderTone(String(transaction.status || ""))}
+                          />
+                        ),
+                      },
+                      {
+                        label: "Method",
+                        render: (transaction) => (
+                          <Stack
+                            subtitle={transaction.processor_response || "No processor note"}
+                            title={transaction.payment_type || "payment"}
+                          />
+                        ),
+                      },
+                      {
+                        label: "Created",
+                        render: (transaction) => (
+                          <span>{formatDateTime(transaction.created_at)}</span>
+                        ),
+                      },
+                    ]}
+                    emptyMessage="Flutterwave returned no transactions for this report window."
+                    isLoading={loadingSections.finance}
+                    loadingMessage="Refreshing Flutterwave transactions..."
+                    rows={flutterwaveReport.transactions || []}
+                  />
+                </div>
+              )}
+            </Subcard>
+
+            <Subcard eyebrow="Flutterwave" title="Local payment attempts">
+              <DataTable
+                columns={[
+                  {
+                    label: "Attempt",
+                    render: (attempt) => (
+                      <Stack
+                        subtitle={attempt.provider_reference || "No local reference"}
+                        tertiary={attempt.payment_type || "payment"}
+                        title={formatMoney(attempt.amount, attempt.currency)}
+                      />
+                    ),
+                  },
+                  {
+                    label: "Driver / customer",
+                    render: (attempt) => (
+                      <Stack
+                        subtitle={
+                          attempt.driver?.phone ||
+                          attempt.customer?.phone ||
+                          attempt.actor_user_id ||
+                          "No contact"
+                        }
+                        title={
+                          attempt.driver?.full_name ||
+                          attempt.customer?.full_name ||
+                          "Unknown user"
+                        }
+                      />
+                    ),
+                  },
+                  {
+                    label: "Status",
+                    render: (attempt) => (
+                      <Pill
+                        label={attempt.status || "unknown"}
+                        tone={renderTone(String(attempt.status || ""))}
+                      />
+                    ),
+                  },
+                  {
+                    label: "Provider note",
+                    render: (attempt) => (
+                      <Stack
+                        subtitle={attempt.provider_transaction_id || "No provider transaction"}
+                        title={attempt.error_message || attempt.checkout_url || "—"}
+                      />
+                    ),
+                  },
+                  {
+                    label: "Created",
+                    render: (attempt) => <span>{formatDateTime(attempt.created_at)}</span>,
+                  },
+                ]}
+                emptyMessage="No local Flutterwave payment attempts have been recorded yet."
+                isLoading={loadingSections.finance}
+                loadingMessage="Refreshing local payment attempts..."
+                rows={finance.paymentAttempts || []}
+              />
+            </Subcard>
+
             <Subcard eyebrow="Collections" title="Recent customer payments">
               <DataTable
                 columns={[
@@ -4806,7 +5049,8 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
         </>
       )}
     </PanelShell>
-  );
+    );
+  };
 
   const renderPartnersSection = () => (
     <PanelShell descriptor={sectionDescriptors.partners} lastRefresh={lastRefresh.partners}>

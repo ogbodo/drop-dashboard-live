@@ -1126,6 +1126,11 @@ textarea {
   gap: 18px;
 }
 
+.finance-report-stack {
+  display: grid;
+  gap: 14px;
+}
+
 .support-ops-grid {
   display: grid;
   gap: 18px;
