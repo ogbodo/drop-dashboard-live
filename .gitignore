@@ -3,3 +3,7 @@ node_modules
 .env
 supabase/functions.env
 npm-debug.log*
+.DS_Store
+**/.DS_Store
+supabase/wipe_app_data_keep_config.sql
+supabase/verify_wipe_app_data_keep_config.sql
