@@ -7,8 +7,7 @@
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
-    "verify": "npm run typecheck && next build",
-    "hash:admin-password": "node scripts/hash-admin-password.mjs"
+    "verify": "npm run typecheck && next build"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.87.1",
