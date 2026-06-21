@@ -7,3 +7,8 @@ npm-debug.log*
 **/.DS_Store
 supabase/wipe_app_data_keep_config.sql
 supabase/verify_wipe_app_data_keep_config.sql
+
+# test artifacts
+coverage/
+test-results/
+playwright-report/

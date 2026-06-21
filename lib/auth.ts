@@ -20,7 +20,7 @@ export const isSecureRequest = (request: NextRequest) => {
   return request.nextUrl.protocol === "https:" || forwardedProto === "https";
 };
 
-const toExpiryDate = (value?: number | string | null) => {
+export const toExpiryDate = (value?: number | string | null) => {
   if (!value) {
     return new Date(Date.now() + ADMIN_SESSION_DURATION_MS);
   }
