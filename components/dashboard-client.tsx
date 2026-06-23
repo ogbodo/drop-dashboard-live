@@ -1812,6 +1812,28 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
     );
   }
 
+  async function grantDriverFreeMonth(driverId: string) {
+    await runConfirmedAction(
+      `driver:grant:${driverId}`,
+      {
+        confirmLabel: "Grant free month",
+        message:
+          "Gives this driver a free 30-day subscription (same effect as the welcome coupon) and logs the grant. They can go online immediately; the paywall returns automatically when it expires.",
+        title: "Grant a free month?",
+        tone: "success",
+      },
+      async () => {
+        await adminAction("grant_driver_subscription", { days: 30, driverId });
+        await refreshSections(["overview", "live-ops", "drivers"]);
+        notify(
+          "Free month granted",
+          "Driver received a 30-day free subscription.",
+          "success",
+        );
+      },
+    );
+  }
+
   async function handleCustomerVerify(customerId: string, nextValue: boolean) {
     await runConfirmedAction(
       `customer-verify:${customerId}`,
@@ -4077,6 +4099,18 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
                           type="button"
                         >
                           {selectedDriver.has_paid ? "Mark unpaid" : "Mark paid"}
+                        </button>
+                        <button
+                          className="secondary-button"
+                          disabled={isActionPending(
+                            `driver:grant:${String(selectedDriver.id)}`,
+                          )}
+                          onClick={() =>
+                            void grantDriverFreeMonth(String(selectedDriver.id))
+                          }
+                          type="button"
+                        >
+                          Grant free month
                         </button>
                       </div>
                     ) : null}

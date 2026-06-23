@@ -18,6 +18,10 @@ const customJestConfig = {
     "^@/(.*)$": "<rootDir>/$1",
   },
   testMatch: ["**/__tests__/**/*.test.ts", "**/__tests__/**/*.test.tsx"],
+  // The supabase/ dir holds Deno edge functions (npm: specifiers, explicit .ts
+  // imports) that jest can't transform; keep them out of jest's module scan
+  // (tsconfig already excludes supabase from tsc for the same reason).
+  modulePathIgnorePatterns: ["<rootDir>/supabase/"],
   collectCoverageFrom: [
     "lib/**/*.{ts,tsx,js}",
     "proxy.ts",

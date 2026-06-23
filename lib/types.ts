@@ -29,6 +29,7 @@ export type DashboardActionName =
   | "cancel_ride"
   | "update_ride_follow_up"
   | "update_driver"
+  | "grant_driver_subscription"
   | "update_customer"
   | "cancel_scheduled_ride"
   | "create_partner"
