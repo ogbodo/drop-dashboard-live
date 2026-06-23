@@ -4,6 +4,13 @@
 // on purpose: a .ts jest config requires `ts-node` at load time, which is not a
 // dependency of this project. next/jest still transpiles the TEST files (and all
 // app source) with SWC + the project's tsconfig, so tests are full TypeScript.
+//
+// GOTCHA: if every suite suddenly fails with "Cannot use import statement
+// outside a module" on jest.setup.ts, jest's transform cache (in the OS tmpdir,
+// NOT node_modules) was poisoned with untransformed output — usually after a
+// window where the platform SWC binary (@next/swc-*) was missing. A clean
+// `npm install` does NOT fix it because the cache lives outside node_modules.
+// Run `npx jest --clearCache` to bust it.
 const createJestConfig = require("next/jest").default({
   // Path to the Next.js app so next/jest can load next.config and .env files.
   dir: "./",

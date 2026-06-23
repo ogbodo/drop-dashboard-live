@@ -57,6 +57,11 @@ const makeRequest = ({
 
 const makeResponse = (): NextResponse => NextResponse.json({ ok: true });
 
+// Next types ResponseCookie.expires as `number | Date`; our cookie helpers
+// always assign a Date, so narrow it here for Date-method assertions.
+const cookieExpiry = (res: NextResponse, name: string): Date | undefined =>
+  res.cookies.get(name)?.expires as Date | undefined;
+
 // A small tolerance (ms) for assertions that compare against Date.now(): the
 // code calls Date.now() internally and a few ms can elapse before we read it.
 const TOLERANCE_MS = 2_000;
@@ -379,8 +384,8 @@ describe("applyAdminSessionCookies", () => {
       csrfToken: "c",
       expiresAt: ms,
     });
-    expect(res.cookies.get(ADMIN_SESSION_COOKIE)?.expires?.getTime()).toBe(ms);
-    expect(res.cookies.get(ADMIN_CSRF_COOKIE)?.expires?.getTime()).toBe(ms);
+    expect(cookieExpiry(res, ADMIN_SESSION_COOKIE)?.getTime()).toBe(ms);
+    expect(cookieExpiry(res, ADMIN_CSRF_COOKIE)?.getTime()).toBe(ms);
   });
 
   it("uses the provided expiresAt (ISO string) as the cookie expiry", () => {
@@ -391,7 +396,7 @@ describe("applyAdminSessionCookies", () => {
       csrfToken: "c",
       expiresAt: iso,
     });
-    expect(res.cookies.get(ADMIN_SESSION_COOKIE)?.expires?.toISOString()).toBe(
+    expect(cookieExpiry(res, ADMIN_SESSION_COOKIE)?.toISOString()).toBe(
       iso,
     );
   });
@@ -403,7 +408,7 @@ describe("applyAdminSessionCookies", () => {
       csrfToken: "c",
       expiresAt: "garbage",
     });
-    const exp = res.cookies.get(ADMIN_SESSION_COOKIE)?.expires?.getTime();
+    const exp = cookieExpiry(res, ADMIN_SESSION_COOKIE)?.getTime();
     expect(exp).toBeDefined();
     const expected = Date.now() + ADMIN_SESSION_DURATION_MS;
     expect(Math.abs((exp as number) - expected)).toBeLessThan(TOLERANCE_MS);
@@ -449,8 +454,8 @@ describe("clearAdminSessionCookies", () => {
   it("sets both cookies to expire at the unix epoch (immediate deletion)", () => {
     const res = makeResponse();
     clearAdminSessionCookies(res);
-    expect(res.cookies.get(ADMIN_SESSION_COOKIE)?.expires?.getTime()).toBe(0);
-    expect(res.cookies.get(ADMIN_CSRF_COOKIE)?.expires?.getTime()).toBe(0);
+    expect(cookieExpiry(res, ADMIN_SESSION_COOKIE)?.getTime()).toBe(0);
+    expect(cookieExpiry(res, ADMIN_CSRF_COOKIE)?.getTime()).toBe(0);
   });
 
   it("preserves the httpOnly split (session httpOnly, csrf not) and sameSite/path on clear", () => {
