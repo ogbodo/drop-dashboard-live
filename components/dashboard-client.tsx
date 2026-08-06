@@ -11,6 +11,7 @@ import {
   useState,
 } from "react";
 import { getSupabaseBrowserClient } from "@/lib/supabase-browser";
+import { useTypingIndicator } from "@/lib/use-typing-indicator";
 import type {
   AnyRecord,
   DashboardActionName,
@@ -622,6 +623,25 @@ const parseJsonInput = (
 
   return JSON.parse(rawValue);
 };
+
+// Sections that may refresh in the background even while a field is focused.
+//
+// Everywhere else a reload replaces the rows behind an inline edit form and would reset a
+// half-finished edit, so the refresh waits for blur. The support chat is different: it is a
+// live conversation, and the moment the agent is typing a reply is exactly the moment a new
+// customer message must appear. It is safe there because the reply draft lives in
+// `supportChatReply` state rather than in the reloaded section payload, and the selected
+// thread is only re-pointed if it disappears from the list entirely.
+const REFRESH_WHILE_TYPING_SECTIONS = new Set<SectionKey>(["support-chat"]);
+
+// Sections that also poll as a safety net, on top of the realtime signal.
+//
+// A websocket can drop without the client being told, and a section that only ever refreshes
+// on a signal would then sit there looking current while it quietly stops updating. That is
+// tolerable for a table the agent will re-open anyway, and not tolerable for a live
+// conversation, so only the chat polls.
+const LIVE_POLL_SECTIONS = new Set<SectionKey>(["support-chat"]);
+const LIVE_POLL_INTERVAL_MS = 15000;
 
 const isEditingField = () => {
   const activeElement = document.activeElement;
@@ -1483,7 +1503,7 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
       return;
     }
 
-    if (isEditingField()) {
+    if (isEditingField() && !REFRESH_WHILE_TYPING_SECTIONS.has(activeSection)) {
       pendingSignalRefreshRef.current = true;
       return;
     }
@@ -1509,10 +1529,14 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
 
   useEffect(() => {
     const flushPendingRefresh = () => {
-      if (!pendingSignalRefreshRef.current || document.hidden || isEditingField()) {
+      if (!pendingSignalRefreshRef.current || document.hidden) {
         return;
       }
 
+      // Whether a focused field should still defer the refresh is section-dependent, and
+      // this closure is created once with `[]` deps so it cannot read the current section.
+      // queueSignalRefresh is a useEffectEvent, so it makes that call with the live value
+      // and re-arms `pendingSignalRefreshRef` itself if it decides to wait.
       queueSignalRefresh();
     };
 
@@ -1539,9 +1563,10 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
     if (
       !isActiveSectionLoading &&
       pendingSignalRefreshRef.current &&
-      !document.hidden &&
-      !isEditingField()
+      !document.hidden
     ) {
+      // Same as above: queueSignalRefresh owns the "is a focused field blocking this?"
+      // decision, because only it can see the section that is active right now.
       queueSignalRefresh();
     }
   }, [activeSection, isActiveSectionLoading]);
@@ -1649,10 +1674,24 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
           queueSignalRefresh();
         },
       )
-      .subscribe();
+      .subscribe((status) => {
+        // Anything that changed while the socket was down produced no event for this client,
+        // so every (re)subscribe is a resync point, not just a connection milestone.
+        if (status === "SUBSCRIBED") {
+          queueSignalRefresh();
+        }
+      });
+
+    const pollTimer = LIVE_POLL_SECTIONS.has(activeSection)
+      ? window.setInterval(() => queueSignalRefresh(), LIVE_POLL_INTERVAL_MS)
+      : null;
 
     return () => {
       pendingSignalRefreshRef.current = false;
+
+      if (pollTimer !== null) {
+        window.clearInterval(pollTimer);
+      }
 
       if (refreshTimerRef.current) {
         window.clearTimeout(refreshTimerRef.current);
@@ -2727,6 +2766,10 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
     // opened themselves. A modal on every message would make the desk unusable.
     setSupportChatSending(true);
     setSupportChatError(null);
+    // The message itself is about to arrive, so leaving "typing" up would be both stale and
+    // misleading. Announce the stop before the request rather than after, so it is sent even
+    // if the request then fails.
+    stopSupportChatTyping();
     try {
       await adminAction("send_support_inbox_reply", { content, userId });
       setSupportChatReply("");
@@ -2829,6 +2872,21 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
     ) ||
     supportChatThreads[0] ||
     null;
+
+  // Live "typing" both ways with the app's support screen. Keyed on the thread owner's id
+  // because that is the only identifier both ends share, and scoped to the open thread so
+  // an agent reading one conversation is not told about keystrokes in another.
+  const {
+    isPeerTyping: isSupportChatPeerTyping,
+    onTextChanged: onSupportChatReplyTyping,
+    stopTyping: stopSupportChatTyping,
+  } = useTypingIndicator({
+    topic:
+      activeSection === "support-chat" && selectedSupportChatThread?.user_id
+        ? `support_chat:${String(selectedSupportChatThread.user_id)}:typing`
+        : null,
+    userId: session?.accountId || session?.username,
+  });
 
   const supportNavUnreadCount =
     activeSection === "support"
@@ -5936,13 +5994,33 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
                             title="No transcript"
                           />
                         )}
+
+                        {/* Last in the transcript, where a chat participant expects it —
+                            and outside the branch above so it also shows on a thread whose
+                            first message is still being typed. */}
+                        {isSupportChatPeerTyping ? (
+                          <div className="support-typing" role="status">
+                            <span aria-hidden="true" className="support-typing-dots">
+                              <i />
+                              <i />
+                              <i />
+                            </span>
+                            {selectedSupportChatThread.user?.full_name || "User"} is
+                            typing...
+                          </div>
+                        ) : null}
                       </div>
 
                       <form className="auth-form" onSubmit={submitSupportChatReply}>
                         <label>
                           Reply as Drop support
                           <textarea
-                            onChange={(event) => setSupportChatReply(event.target.value)}
+                            onBlur={stopSupportChatTyping}
+                            onChange={(event) => {
+                              setSupportChatReply(event.target.value);
+                              // Throttled inside the hook, so this is safe per keystroke.
+                              onSupportChatReplyTyping(event.target.value);
+                            }}
                             placeholder="Type your reply. It appears in the user's in-app support thread."
                             rows={4}
                             value={supportChatReply}
