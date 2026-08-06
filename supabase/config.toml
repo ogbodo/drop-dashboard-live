@@ -1,0 +1,9 @@
+# Supabase config for the dashboard's own edge function.
+# drop-admin is the dashboard admin API; it lives here (not in drop-backend)
+# because it imports the dashboard's ../../../lib/dashboard-data.js handlers.
+project_id = "bvrfhqllbvqkocfkduhy"
+
+[functions.drop-admin]
+enabled = true
+verify_jwt = true
+entrypoint = "./functions/drop-admin/index.ts"

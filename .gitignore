@@ -1,5 +1,21 @@
 .next
 node_modules
+
+# env files — only the .example template is tracked
 .env
+.env.*
+!.env.example
 supabase/functions.env
+supabase/functions.*.env
+supabase/deploy.env
+supabase/deploy.*.env
 npm-debug.log*
+.DS_Store
+**/.DS_Store
+supabase/wipe_app_data_keep_config.sql
+supabase/verify_wipe_app_data_keep_config.sql
+
+# test artifacts
+coverage/
+test-results/
+playwright-report/

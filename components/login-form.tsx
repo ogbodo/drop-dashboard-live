@@ -34,7 +34,13 @@ export function LoginForm() {
         throw new Error(payload.error || "Login failed.");
       }
 
-      const nextPath = searchParams.get("next") || "/";
+      const requestedNext = searchParams.get("next");
+      const nextPath =
+        requestedNext &&
+        requestedNext.startsWith("/") &&
+        !requestedNext.startsWith("//")
+          ? requestedNext
+          : "/";
       router.replace(nextPath);
       router.refresh();
     } catch (submitError) {
