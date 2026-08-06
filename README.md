@@ -29,8 +29,10 @@ the prod values under *Production*, the dev values under *Preview* and
 *Development*. They only change on redeploy.
 
 **`drop-admin`** is deployed by `.github/workflows/deploy-drop-admin.yml`, which
-picks the project from the branch. It needs `SUPABASE_ACCESS_TOKEN_DEV` and
-`SUPABASE_ACCESS_TOKEN_PROD` as repository secrets. The workflow is
+picks the project from the branch. It needs a single
+`SUPABASE_ACCESS_TOKEN` repository secret — Supabase personal access tokens are
+account-scoped, so one token manages both projects (`SUPABASE_ACCESS_TOKEN_DEV`
+/ `_PROD` still work as a deprecated fallback). The workflow is
 path-filtered, so a front-end-only change does not redeploy the function.
 
 ### The guard
