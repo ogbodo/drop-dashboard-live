@@ -9,6 +9,11 @@ supabase/functions.env
 supabase/functions.*.env
 supabase/deploy.env
 supabase/deploy.*.env
+
+# Supabase CLI local cache — machine-specific, rewritten on every CLI invocation.
+# supabase/.temp/cli-latest was tracked, so it showed up as a modification for
+# whoever last ran the CLI. Matches the drop-backend repo, which already ignores it.
+supabase/.temp/
 npm-debug.log*
 .DS_Store
 **/.DS_Store
