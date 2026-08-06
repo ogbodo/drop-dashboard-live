@@ -1221,6 +1221,9 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
   const [supportUnreadTotal, setSupportUnreadTotal] = useState(0);
   const hasHydratedRef = useRef(false);
   const inflightSectionsRef = useRef<Partial<Record<SectionKey, Promise<void>>>>({});
+  // The filter signature each inflight request is fetching, so a caller that wants a
+  // different one is not silently folded into it. See loadSingleSection.
+  const inflightSignaturesRef = useRef<Partial<Record<SectionKey, string>>>({});
   const loadedSectionsRef = useRef<Partial<Record<SectionKey, boolean>>>({});
   const loadingSectionsRef = useRef<Record<string, boolean>>({});
   const appliedFilterSignaturesRef = useRef<Partial<Record<SectionKey, string>>>({});
@@ -1408,13 +1411,21 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
     section: SectionKey,
     options: { background?: boolean } = {},
   ) => {
+    const filterSignature = getSectionFilterSignature(section);
+
+    // Fold into an inflight request only when it is fetching what THIS caller asked for.
+    // Deduping on `section` alone silently dropped loads: when the debounced filter change
+    // fired while a request for the PREVIOUS search string was still in flight, this returned
+    // without fetching, and nothing re-armed it — the filter effect's deps had not changed,
+    // the pending-signal effect needs a flag the filter path never sets, and the
+    // allowedSections effect has a stable module-level array as its dep. The list then kept
+    // rendering results for the old search string until some unrelated event forced a load.
     const existingRequest = inflightSectionsRef.current[section];
-    if (existingRequest) {
+    if (existingRequest && inflightSignaturesRef.current[section] === filterSignature) {
       await existingRequest;
       return;
     }
 
-    const filterSignature = getSectionFilterSignature(section);
     const params = getSectionParams(section);
 
     const request = (async () => {
@@ -1429,6 +1440,14 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
       try {
         const data = await fetchSection(section, params);
 
+        // Two requests for one section can now overlap (different filter values), and the
+        // older one is not guaranteed to finish first. Applying a payload whose signature is
+        // no longer current would show results for a search string the agent has moved on
+        // from, and would record that stale signature as the applied one.
+        if (getSectionFilterSignature(section) !== filterSignature) {
+          return;
+        }
+
         loadedSectionsRef.current[section] = true;
         appliedFilterSignaturesRef.current[section] = filterSignature;
         setSectionData((current) => ({ ...current, [section]: data }));
@@ -1440,6 +1459,21 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
           }),
         }));
       } catch (error) {
+        // A failed BACKGROUND refresh must not replace good data with an error card. Every
+        // section renders sectionErrors[section] ahead of its data branch, so writing it here
+        // swaps the entire panel — for support-chat that means the agent's open transcript,
+        // their reply box and its focus — on a single transient 5xx, then swaps back on the
+        // next tick. That was survivable while a section only refetched when a signal said
+        // the data had actually changed; with a 15s safety-net poll it becomes a fresh dice
+        // roll four times a minute on the one section an agent keeps open.
+        //
+        // The last good payload and its "last refresh" timestamp stay on screen instead, so
+        // the staleness is visible in the panel header and the next tick recovers silently.
+        // A foreground load has nothing to fall back on, so there the error card is correct.
+        if (options.background && loadedSectionsRef.current[section]) {
+          return;
+        }
+
         setSectionErrors((current) => ({
           ...current,
           [section]:
@@ -1455,12 +1489,15 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
     })();
 
     inflightSectionsRef.current[section] = request;
+    inflightSignaturesRef.current[section] = filterSignature;
 
     try {
       await request;
     } finally {
+      // Only clear if a newer request has not already taken the slot.
       if (inflightSectionsRef.current[section] === request) {
         delete inflightSectionsRef.current[section];
+        delete inflightSignaturesRef.current[section];
       }
     }
   };
@@ -2773,6 +2810,10 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
     try {
       await adminAction("send_support_inbox_reply", { content, userId });
       setSupportChatReply("");
+      // Sending is the one event that should always override the pin. Staying put is right for
+      // an INCOMING message while the agent reads history, but their own reply landing below
+      // the fold just looks like it did not send.
+      supportTranscriptPinnedRef.current = true;
       await refreshSections(["support-chat"], { background: true });
       notify(
         "Reply sent",
@@ -2892,6 +2933,24 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
     supportTranscriptPinnedRef.current = distanceFromBottom <= 48;
   };
 
+  // Attached as a ref CALLBACK rather than a plain ref, because the follow effect below
+  // cannot see a remount. `.panel-stage` carries key={activeSection}, so switching sections
+  // and coming back (and likewise the error-card round trip) destroys this scroller and
+  // builds a fresh one at scrollTop 0 — while the effect's deps are all unchanged, since the
+  // thread, its last message id and the typing flag are exactly as they were. The transcript
+  // would sit on the oldest message until something else moved it.
+  //
+  // It also re-derives the pin from the new node. Otherwise the pinned value from the
+  // previous visit decides whether the next message is followed, so an agent who had
+  // scrolled up into history before leaving came back to a scroller at the top that then
+  // refused to follow new messages either.
+  const attachSupportTranscript = (element: HTMLDivElement | null) => {
+    supportTranscriptRef.current = element;
+    if (!element) return;
+    supportTranscriptPinnedRef.current = true;
+    element.scrollTop = element.scrollHeight;
+  };
+
   // Opening a different conversation always starts at its newest message.
   useEffect(() => {
     supportTranscriptPinnedRef.current = true;
@@ -2914,6 +2973,11 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
         ? `support_chat:${String(selectedSupportChatThread.user_id)}:typing`
         : null,
     userId: session?.accountId || session?.username,
+    // The transcript names this person, so only their pings may light the indicator. Other
+    // dashboard clients on the same thread are ignored rather than attributed to them.
+    peerUserId: selectedSupportChatThread?.user_id
+      ? String(selectedSupportChatThread.user_id)
+      : null,
   });
 
   useEffect(() => {
@@ -5998,7 +6062,7 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
                       <div
                         className="support-transcript"
                         onScroll={handleSupportTranscriptScroll}
-                        ref={supportTranscriptRef}
+                        ref={attachSupportTranscript}
                       >
                         {transcript.length ? (
                           transcript.map((entry: AnyRecord, index: number) => (

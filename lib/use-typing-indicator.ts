@@ -30,14 +30,29 @@ type TypingIndicatorConfig = {
   topic: string | null | undefined;
   /** This account's id, so its own echo is ignored. */
   userId: string | null | undefined;
+  /**
+   * Only treat pings from THIS user as the peer.
+   *
+   * Needed wherever more than two clients can share one topic. On the support desk the topic
+   * is keyed by the thread owner, so it is joined by the owner's app AND by every dashboard
+   * client with that thread open — a second agent, or simply this agent's own second tab.
+   * Omit on a genuinely two-party thread, where anyone who is not you is the peer.
+   */
+  peerUserId?: string | null;
 };
 
-export function useTypingIndicator({ topic, userId }: TypingIndicatorConfig) {
+export function useTypingIndicator({
+  topic,
+  userId,
+  peerUserId,
+}: TypingIndicatorConfig) {
   const [isPeerTyping, setIsPeerTyping] = useState(false);
 
   const channelRef = useRef<RealtimeChannel | null>(null);
   const userIdRef = useRef(userId);
   userIdRef.current = userId;
+  const peerUserIdRef = useRef(peerUserId);
+  peerUserIdRef.current = peerUserId;
 
   /**
    * Identifies this tab. The peer filter cannot key on userId alone — one agent with the
@@ -134,11 +149,22 @@ export function useTypingIndicator({ topic, userId }: TypingIndicatorConfig) {
       .channel(topic)
       .on("broadcast", { event: "typing" }, (message) => {
         const payload = message?.payload as
-          | { clientId?: string; isTyping?: boolean }
+          | { clientId?: string; isTyping?: boolean; userId?: string }
           | undefined;
         if (!payload) return;
         // Ignore this tab's own echo only — not everything from this account id.
         if (payload.clientId === clientIdRef.current) return;
+
+        // Suppressing our own echo is not enough to know the sender IS the peer. Without a
+        // positive check, another dashboard client's keystrokes on the same thread render as
+        // "<customer> is typing", naming someone who is not typing at all.
+        const expectedPeerUserId = peerUserIdRef.current;
+        if (
+          expectedPeerUserId &&
+          String(payload.userId ?? "") !== String(expectedPeerUserId)
+        ) {
+          return;
+        }
 
         if (remoteTimeoutRef.current) {
           clearTimeout(remoteTimeoutRef.current);
