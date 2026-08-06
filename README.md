@@ -12,6 +12,44 @@ This project is built around the real Drop service surface described by:
 - `/Users/izuchukwuogbodo/Desktop/drop-ride-hailing-backend`
 - the Supabase schema, migrations, and edge functions bundled with the driver app
 
+## Environments
+
+Two Supabase projects, one per branch — the same split the mobile apps use.
+
+| Branch | Vercel deployment | Supabase project |
+|---|---|---|
+| `dev` | Preview | dev · `bvrfhqllbvqkocfkduhy` |
+| `main` | Production | prod · `wumhtdhmntjvicsiiovu` |
+
+Local development uses the **dev** project (`.env`, see `.env.example`).
+
+**The web app** reads `NEXT_PUBLIC_SUPABASE_*`, which Next.js bakes in at build
+time. Set them per environment in Vercel → Settings → Environment Variables:
+the prod values under *Production*, the dev values under *Preview* and
+*Development*. They only change on redeploy.
+
+**`drop-admin`** is deployed by `.github/workflows/deploy-drop-admin.yml`, which
+picks the project from the branch. It needs `SUPABASE_ACCESS_TOKEN_DEV` and
+`SUPABASE_ACCESS_TOKEN_PROD` as repository secrets. The workflow is
+path-filtered, so a front-end-only change does not redeploy the function.
+
+### The guard
+
+`assertBackendMatchesDeployment()` in `lib/env.ts` runs on every API route and
+treats the two failure directions differently, on purpose:
+
+- A **Preview** deployment wired to **prod** throws. This portal verifies
+  drivers, moves money and edits live config; a branch deploy must never do that
+  to production data.
+- A **Production** deployment wired to **dev** only warns. It cannot damage
+  production, and throwing would take the live dashboard down the moment this
+  ships — before the Vercel Production variables have been repointed.
+
+Set `DASHBOARD_ALLOW_BACKEND_MISMATCH=true` to bypass it deliberately.
+
+> `drop-backend` owns the other 23 edge functions on both projects. Never deploy
+> from this repo with `--prune`; it would delete every one of them.
+
 ## Architecture
 
 The dashboard app now keeps only public Supabase configuration.

@@ -1,6 +1,12 @@
 # Supabase config for the dashboard's own edge function.
 # drop-admin is the dashboard admin API; it lives here (not in drop-backend)
 # because it imports the dashboard's ../../../lib/dashboard-data.js handlers.
+#
+# project_id is only the default for local `supabase link` — deploys always pass
+# --project-ref explicitly, so this cannot send a deploy to the wrong project.
+# It points at DEV because that is what you should be linked to locally.
+#   dev  bvrfhqllbvqkocfkduhy   (dev branch  -> .github/workflows/deploy-drop-admin.yml)
+#   prod wumhtdhmntjvicsiiovu   (main branch -> same workflow)
 project_id = "bvrfhqllbvqkocfkduhy"
 
 [functions.drop-admin]

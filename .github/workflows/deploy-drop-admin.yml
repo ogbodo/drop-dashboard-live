@@ -1,0 +1,115 @@
+name: Deploy drop-admin
+
+# The dashboard owns the drop-admin edge function — it lives here rather than in
+# drop-backend because it imports ../../../lib/dashboard-data.js from this repo.
+#
+# Same branch split as everything else:
+#   dev  -> dev Supabase  (bvrfhqllbvqkocfkduhy)
+#   main -> prod Supabase (wumhtdhmntjvicsiiovu)
+#
+# Vercel deploys the web app itself; this workflow only ships the edge function.
+# Path-filtered so a purely front-end change does not redeploy it.
+
+on:
+  push:
+    branches: [main, dev]
+    paths:
+      - "supabase/functions/**"
+      - "lib/dashboard-data.js"
+      - "supabase/config.toml"
+      - ".github/workflows/deploy-drop-admin.yml"
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Which project to deploy drop-admin to"
+        type: choice
+        options: [dev, prod]
+        default: dev
+
+concurrency:
+  group: drop-admin-${{ github.ref }}
+  cancel-in-progress: false # never interrupt a deploy mid-flight
+
+jobs:
+  deploy:
+    name: ${{ github.ref_name == 'main' && 'prod' || 'dev' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Resolve target
+        id: target
+        env:
+          DISPATCH_TARGET: ${{ github.event.inputs.target }}
+        run: |
+          if [ -n "$DISPATCH_TARGET" ]; then
+            TARGET="$DISPATCH_TARGET"
+          elif [ "${{ github.ref_name }}" = "main" ]; then
+            TARGET="prod"
+          else
+            TARGET="dev"
+          fi
+          case "$TARGET" in
+            prod) REF="wumhtdhmntjvicsiiovu" ;;
+            dev)  REF="bvrfhqllbvqkocfkduhy" ;;
+            *) echo "::error title=Bad target::'$TARGET' is not dev or prod"; exit 1 ;;
+          esac
+          echo "target=$TARGET" >> "$GITHUB_OUTPUT"
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
+          echo "Deploying drop-admin to $TARGET ($REF)"
+
+      - name: Check the access token is present
+        env:
+          PROD_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN_PROD }}
+          DEV_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN_DEV }}
+          TARGET: ${{ steps.target.outputs.target }}
+        run: |
+          if [ "$TARGET" = "prod" ]; then TOKEN="$PROD_TOKEN"; else TOKEN="$DEV_TOKEN"; fi
+          if [ -z "$TOKEN" ]; then
+            echo "::error title=Missing secret::SUPABASE_ACCESS_TOKEN_${TARGET^^} is not set on this repository."
+            exit 1
+          fi
+
+      # --use-api bundles server-side, so no Docker on the runner.
+      # NEVER add --prune here: drop-backend owns the other 23 functions on these
+      # projects and pruning from this repo would delete every one of them.
+      - name: Deploy drop-admin
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ steps.target.outputs.target == 'prod' && secrets.SUPABASE_ACCESS_TOKEN_PROD || secrets.SUPABASE_ACCESS_TOKEN_DEV }}
+          PROJECT_REF: ${{ steps.target.outputs.ref }}
+        run: |
+          npx --yes supabase@latest functions deploy drop-admin \
+            --project-ref "$PROJECT_REF" \
+            --use-api
+
+      - name: Verify it is live
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ steps.target.outputs.target == 'prod' && secrets.SUPABASE_ACCESS_TOKEN_PROD || secrets.SUPABASE_ACCESS_TOKEN_DEV }}
+          PROJECT_REF: ${{ steps.target.outputs.ref }}
+        run: |
+          STATUS=$(curl -sS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$PROJECT_REF/functions/drop-admin" \
+            | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{const j=JSON.parse(d);console.log(j.status+" v"+j.version+" verify_jwt="+j.verify_jwt)})')
+          echo "drop-admin on $PROJECT_REF: $STATUS"
+          case "$STATUS" in
+            ACTIVE*) ;;
+            *) echo "::error title=Not active::drop-admin is '$STATUS' after deploy"; exit 1 ;;
+          esac
+          echo "$STATUS" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### drop-admin -> ${{ steps.target.outputs.target }}"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Project | \`${{ steps.target.outputs.ref }}\` |"
+            echo "| Branch | \`${{ github.ref_name }}\` |"
+            echo "| Commit | \`${{ github.sha }}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
