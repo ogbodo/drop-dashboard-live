@@ -1331,6 +1331,60 @@ textarea {
   font-weight: 800;
 }
 
+/* Live "user is typing" line at the foot of the transcript. Deliberately not a
+   .support-entry: it is transient and must not read as a message that was actually sent. */
+.support-typing {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 4px;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-style: italic;
+}
+
+.support-typing-dots {
+  display: inline-flex;
+  gap: 3px;
+}
+
+.support-typing-dots i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent-deep);
+  animation: support-typing-bounce 1.2s infinite ease-in-out both;
+}
+
+.support-typing-dots i:nth-child(2) {
+  animation-delay: 0.16s;
+}
+
+.support-typing-dots i:nth-child(3) {
+  animation-delay: 0.32s;
+}
+
+@keyframes support-typing-bounce {
+  0%,
+  70%,
+  100% {
+    opacity: 0.28;
+    transform: translateY(0);
+  }
+  35% {
+    opacity: 1;
+    transform: translateY(-3px);
+  }
+}
+
+/* Respect a reduced-motion preference: keep the line, drop the bouncing. */
+@media (prefers-reduced-motion: reduce) {
+  .support-typing-dots i {
+    animation: none;
+    opacity: 0.6;
+  }
+}
+
 .support-compose-dialog {
   width: min(100%, 720px);
   display: grid;
