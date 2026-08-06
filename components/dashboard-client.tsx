@@ -2753,7 +2753,19 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
     supportConversationThreads.find((thread) => String(thread.ride_id) === selectedSupportRideId) ||
     supportConversationThreads[0] ||
     null;
-  const supportNavUnreadCount = activeSection === "support" ? 0 : supportUnreadTotal;
+  // Server-derived, with the local counter only as a fallback. `supportUnreadTotal`
+  // used to be incremented by a ride_messages realtime subscription that could
+  // never fire (anon client vs a `TO authenticated` policy), so this badge was
+  // permanently 0. getSupportData computes `unreadMessages` from
+  // dashboard_support_thread_reads, and the section-signal subscription above
+  // refreshes it in the background while the agent is on another section.
+  const supportNavUnreadCount =
+    activeSection === "support"
+      ? 0
+      : Number(
+          (support?.counts as AnyRecord | undefined)?.unreadMessages ??
+            supportUnreadTotal,
+        ) || 0;
   const selectedRide =
     rides.find((ride) => String(ride.id) === selectedRideId) || null;
   const selectedDriver =
@@ -2920,33 +2932,42 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
       return;
     }
 
+    // This used to subscribe directly to public.ride_messages, which delivered
+    // NOTHING: the browser client is anon, and ride_messages_participants_can_select
+    // is `TO authenticated` (20260618123000_harden_rls_policies.sql), so Realtime
+    // filtered out every row before fan-out. The support unread badge therefore
+    // never moved while an agent sat on another section.
+    //
+    // public.dashboard_section_signals is the table built for this: it is anon
+    // readable (`for select using (true)`), it is in the publication, and
+    // dashboard_capture_section_change already bumps its `support` row on every
+    // ride_messages insert. The signal carries no ride id, so instead of
+    // incrementing locally we refresh the support section in the background —
+    // getSupportData computes `unread_messages` per thread server-side from
+    // dashboard_support_thread_reads, which is the authoritative count anyway.
     const channel = supabase
       .channel(`dashboard-support-unread:${session.accountId || session.username}`)
       .on(
         "postgres_changes",
         {
-          event: "INSERT",
+          event: "*",
+          filter: "section=eq.support",
           schema: "public",
-          table: "ride_messages",
+          table: "dashboard_section_signals",
         },
         (payload) => {
-          const rideId = String(payload.new?.ride_id || "");
-          if (!rideId) {
+          const nextRow = payload.new as SectionSignalRow;
+          if (!matchesVisibleSectionSignal(nextRow, "support", session)) {
             return;
           }
 
-          if (activeSection === "support" && rideId === String(selectedSupportThread?.ride_id || "")) {
+          // While the agent is reading the support section its own section-signal
+          // effect already refreshes it; this only covers the other sections.
+          if (activeSection === "support") {
             return;
           }
 
-          setSupportUnreadByRide((current) => ({
-            ...current,
-            [rideId]: Number(current[rideId] || 0) + 1,
-          }));
-
-          if (activeSection !== "support") {
-            setSupportUnreadTotal((current) => current + 1);
-          }
+          void refreshSections(["support"], { background: true });
         },
       )
       .subscribe();
@@ -2954,7 +2975,7 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
     return () => {
       void supabase.removeChannel(channel);
     };
-  }, [activeSection, selectedSupportThread?.ride_id, session]);
+  }, [activeSection, session]);
 
   useEffect(() => {
     if (activeSection !== "support" || !selectedSupportThread?.ride_id) {

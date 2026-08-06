@@ -50,6 +50,7 @@ export type DashboardActionName =
   | "reset_password"
   | "toggle_account_status"
   | "send_support_reply"
+  | "send_support_inbox_reply"
   | "mark_support_thread_seen";
 
 export type DashboardSectionName =
@@ -62,6 +63,7 @@ export type DashboardSectionName =
   | "finance"
   | "partners"
   | "support"
+  | "support-chat"
   | "settings"
   | "access"
   | "workspace";

@@ -16,8 +16,10 @@ import {
   getScheduledRidesData,
   getSettingsData,
   getSupportData,
+  getSupportInboxData,
   grantDriverSubscription,
   markSupportThreadSeen,
+  sendSupportInboxReply,
   sendSupportReply,
   sendPushNotification,
   updateAppConfig,
@@ -69,6 +71,7 @@ type DashboardActionName =
   | "reset_password"
   | "toggle_account_status"
   | "send_support_reply"
+  | "send_support_inbox_reply"
   | "mark_support_thread_seen";
 
 type DashboardSectionName =
@@ -81,6 +84,7 @@ type DashboardSectionName =
   | "finance"
   | "partners"
   | "support"
+  | "support-chat"
   | "settings"
   | "access"
   | "workspace";
@@ -177,6 +181,7 @@ const leadershipSections = new Set<DashboardSectionName>([
   "finance",
   "partners",
   "support",
+  "support-chat",
   "settings",
   "access",
 ]);
@@ -1216,6 +1221,17 @@ const adminSectionHandlers: Record<
     }, {
       accountId: session.accountId || null,
     }),
+  // The direct user <-> support thread (public.support_messages), as opposed to
+  // `support`, which is the ride-scoped console backed by
+  // dashboard_support_responses. "support-chat" was already listed as a valid
+  // section name and authorized for leadership, and getSupportInboxData was
+  // already imported — but this entry was missing, so the section 404'd and the
+  // inbox was unreachable.
+  "support-chat": async (request) =>
+    getSupportInboxData(supabaseAdmin, {
+      limit: new URL(request.url).searchParams.get("limit"),
+      search: new URL(request.url).searchParams.get("search"),
+    }),
 };
 
 const handleLogin = async (request: Request) => {
@@ -1639,6 +1655,17 @@ const handleAction = async (request: Request) => {
     case "send_support_reply":
       requireTeamOperator(session);
       return jsonSuccess(await sendSupportReply(supabaseAdmin, session, payload));
+    // The ONLY path that puts an agent reply into public.support_messages — the
+    // table both apps read and subscribe to. It was declared in the action union
+    // and imported, but had no case here, so the in-app support chat was
+    // write-only: users' messages were stored and no reply could ever reach them.
+    // (`send_support_reply` above writes to dashboard_support_responses, which no
+    // app reads.)
+    case "send_support_inbox_reply":
+      requireTeamOperator(session);
+      return jsonSuccess(
+        await sendSupportInboxReply(supabaseAdmin, session, payload),
+      );
     case "cancel_ride":
       requireLeadership(session);
       return jsonSuccess(
