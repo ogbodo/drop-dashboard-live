@@ -2873,6 +2873,34 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
     supportChatThreads[0] ||
     null;
 
+  const supportChatTranscript =
+    (selectedSupportChatThread?.transcript as AnyRecord[] | undefined) || [];
+
+  // The transcript is oldest-first inside a fixed-height scroller, so a newly arrived message
+  // lands below the fold. Without this, making the section live changed nothing the agent
+  // could actually see — the message was in the DOM, just out of view.
+  const supportTranscriptRef = useRef<HTMLDivElement | null>(null);
+  // Whether the agent is reading the live end of the thread. Someone scrolled up into history
+  // must not be yanked back down mid-sentence, so only a pinned view auto-follows.
+  const supportTranscriptPinnedRef = useRef(true);
+
+  const handleSupportTranscriptScroll = () => {
+    const element = supportTranscriptRef.current;
+    if (!element) return;
+    const distanceFromBottom =
+      element.scrollHeight - element.scrollTop - element.clientHeight;
+    supportTranscriptPinnedRef.current = distanceFromBottom <= 48;
+  };
+
+  // Opening a different conversation always starts at its newest message.
+  useEffect(() => {
+    supportTranscriptPinnedRef.current = true;
+  }, [selectedSupportChatUserId]);
+
+  const supportTranscriptTail = supportChatTranscript.length
+    ? String(supportChatTranscript[supportChatTranscript.length - 1]?.id || "")
+    : "";
+
   // Live "typing" both ways with the app's support screen. Keyed on the thread owner's id
   // because that is the only identifier both ends share, and scoped to the open thread so
   // an agent reading one conversation is not told about keystrokes in another.
@@ -2887,6 +2915,16 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
         : null,
     userId: session?.accountId || session?.username,
   });
+
+  useEffect(() => {
+    const element = supportTranscriptRef.current;
+    if (!element || !supportTranscriptPinnedRef.current) return;
+    element.scrollTop = element.scrollHeight;
+    // Keyed on the last message id rather than the array, because a background refresh
+    // rebuilds that array every 15s and re-running this on an unchanged thread would fight
+    // the agent's own scrolling. The typing line is in here because it adds height at the
+    // foot of the transcript, which would otherwise nudge the newest message out of view.
+  }, [isSupportChatPeerTyping, selectedSupportChatUserId, supportTranscriptTail]);
 
   const supportNavUnreadCount =
     activeSection === "support"
@@ -5831,8 +5869,7 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
 
   const renderSupportChatSection = () => {
     const counts = (supportChat?.counts as AnyRecord | undefined) || {};
-    const transcript =
-      (selectedSupportChatThread?.transcript as AnyRecord[] | undefined) || [];
+    const transcript = supportChatTranscript;
 
     return (
       <PanelShell
@@ -5958,7 +5995,11 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
                         </div>
                       </div>
 
-                      <div className="support-transcript">
+                      <div
+                        className="support-transcript"
+                        onScroll={handleSupportTranscriptScroll}
+                        ref={supportTranscriptRef}
+                      >
                         {transcript.length ? (
                           transcript.map((entry: AnyRecord, index: number) => (
                             <div
