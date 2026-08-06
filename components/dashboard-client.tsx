@@ -66,6 +66,7 @@ const leadershipSectionOrder: SectionKey[] = [
   "overview",
   "live-ops",
   "support",
+  "support-chat",
   "access",
   "rides",
   "drivers",
@@ -100,6 +101,7 @@ const filterableSections = new Set<SectionKey>([
   "scheduled-rides",
   "partners",
   "support",
+  "support-chat",
 ]);
 
 const sectionDescriptors: Record<SectionKey, SectionDescriptor> = {
@@ -180,6 +182,13 @@ const sectionDescriptors: Record<SectionKey, SectionDescriptor> = {
     label: "Support",
     title: "Support inbox and response desk",
   },
+  "support-chat": {
+    description:
+      "Answer customers and drivers directly in their in-app support thread. Replies land in the app and send a push notification.",
+    eyebrow: "Support operations",
+    label: "Support chat",
+    title: "Direct support conversations",
+  },
   workspace: {
     description:
       "Partners land in a scoped portal with their own referrals, rides, commissions, payouts, and account tools.",
@@ -201,6 +210,7 @@ const initialSectionData: Record<SectionKey, AnyRecord | AnyRecord[] | null> = {
   "scheduled-rides": null,
   settings: null,
   support: null,
+  "support-chat": null,
   workspace: null,
 };
 
@@ -1139,6 +1149,7 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
     ridesTripType: "all",
     scheduledSearch: "",
     scheduledStatus: "all",
+    supportChatSearch: "",
     supportSearch: "",
   });
   const [pendingActions, setPendingActions] = useState<Record<string, boolean>>({});
@@ -1182,6 +1193,11 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
   const [staffRolePreset, setStaffRolePreset] = useState<string>(staffRolePresetOptions[0].value);
   const [supportTypingLabel, setSupportTypingLabel] = useState("");
   const [supportUnreadByRide, setSupportUnreadByRide] = useState<Record<string, number>>({});
+  // Direct support inbox (public.support_messages), keyed by user rather than by ride.
+  const [selectedSupportChatUserId, setSelectedSupportChatUserId] = useState<string | null>(null);
+  const [supportChatReply, setSupportChatReply] = useState("");
+  const [supportChatSending, setSupportChatSending] = useState(false);
+  const [supportChatError, setSupportChatError] = useState<string | null>(null);
   const [supportUnreadTotal, setSupportUnreadTotal] = useState(0);
   const hasHydratedRef = useRef(false);
   const inflightSectionsRef = useRef<Partial<Record<SectionKey, Promise<void>>>>({});
@@ -1316,6 +1332,10 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
 
     if (section === "support") {
       return new URLSearchParams({ search: filters.supportSearch });
+    }
+
+    if (section === "support-chat") {
+      return new URLSearchParams({ search: filters.supportChatSearch });
     }
 
     return undefined;
@@ -1567,6 +1587,7 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
     filters.ridesTripType,
     filters.scheduledSearch,
     filters.scheduledStatus,
+    filters.supportChatSearch,
     filters.supportSearch,
     session,
   ]);
@@ -2684,6 +2705,47 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
     );
   }
 
+  async function submitSupportChatReply(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    const userId = selectedSupportChatThread?.user_id
+      ? String(selectedSupportChatThread.user_id)
+      : "";
+    if (!userId) {
+      notify("Select a thread", "Choose a conversation before replying.", "warning");
+      return;
+    }
+
+    const content = supportChatReply.trim();
+    if (!content) {
+      notify("Message required", "Write a reply before sending it.", "warning");
+      return;
+    }
+
+    // No confirmation dialog here, unlike the ride-scoped console: that one fans a push out
+    // to both ride participants, whereas this is a one-to-one reply in a thread the user
+    // opened themselves. A modal on every message would make the desk unusable.
+    setSupportChatSending(true);
+    setSupportChatError(null);
+    try {
+      await adminAction("send_support_inbox_reply", { content, userId });
+      setSupportChatReply("");
+      await refreshSections(["support-chat"], { background: true });
+      notify(
+        "Reply sent",
+        "It is now in the customer's in-app support thread, and a push notification was sent.",
+        "success",
+      );
+    } catch (error) {
+      // Keep the text in the box so the agent does not lose what they wrote.
+      const message =
+        error instanceof Error ? error.message : "The reply could not be sent.";
+      setSupportChatError(message);
+    } finally {
+      setSupportChatSending(false);
+    }
+  }
+
   async function handleAccountPasswordReset(accountId: string, username: string) {
     const promptResult = await requestPrompt({
       confirmLabel: "Use temporary password",
@@ -2759,6 +2821,15 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
   // permanently 0. getSupportData computes `unreadMessages` from
   // dashboard_support_thread_reads, and the section-signal subscription above
   // refreshes it in the background while the agent is on another section.
+  const supportChat = sectionData["support-chat"] as AnyRecord | null;
+  const supportChatThreads = (supportChat?.threads as AnyRecord[] | undefined) || [];
+  const selectedSupportChatThread =
+    supportChatThreads.find(
+      (thread) => String(thread.user_id) === selectedSupportChatUserId,
+    ) ||
+    supportChatThreads[0] ||
+    null;
+
   const supportNavUnreadCount =
     activeSection === "support"
       ? 0
@@ -2863,6 +2934,31 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
       setSelectedSupportRideId(String(supportConversationThreads[0].ride_id));
     }
   }, [selectedSupportRideId, supportConversationThreads]);
+
+  useEffect(() => {
+    if (!supportChatThreads.length) {
+      if (selectedSupportChatUserId) setSelectedSupportChatUserId(null);
+      return;
+    }
+
+    // Fall back to the most recently active thread when the current selection is gone
+    // (filtered out by a search, or the list reloaded).
+    if (
+      !selectedSupportChatUserId ||
+      !supportChatThreads.some(
+        (thread) => String(thread.user_id) === selectedSupportChatUserId,
+      )
+    ) {
+      setSelectedSupportChatUserId(String(supportChatThreads[0].user_id));
+    }
+  }, [selectedSupportChatUserId, supportChatThreads]);
+
+  // Clear the composer when switching threads, so a half-typed reply cannot be sent to
+  // the wrong person.
+  useEffect(() => {
+    setSupportChatReply("");
+    setSupportChatError(null);
+  }, [selectedSupportChatUserId]);
 
   useEffect(() => {
     if (activeSection === "support") {
@@ -5675,6 +5771,205 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
     </PanelShell>
   );
 
+  const renderSupportChatSection = () => {
+    const counts = (supportChat?.counts as AnyRecord | undefined) || {};
+    const transcript =
+      (selectedSupportChatThread?.transcript as AnyRecord[] | undefined) || [];
+
+    return (
+      <PanelShell
+        descriptor={sectionDescriptors["support-chat"]}
+        lastRefresh={lastRefresh["support-chat"]}
+      >
+        {loadingSections["support-chat"] && !supportChat ? (
+          <LoadingCard message="Loading support conversations..." />
+        ) : sectionErrors["support-chat"] ? (
+          <ErrorState
+            message={sectionErrors["support-chat"]}
+            title="Support conversations unavailable"
+          />
+        ) : (
+          <>
+            <div className="metric-grid">
+              <MetricCard
+                label="Awaiting reply"
+                value={formatNumber(Number(counts.awaitingReply || 0))}
+              />
+              <MetricCard
+                label="Conversations"
+                value={formatNumber(Number(counts.totalThreads || 0))}
+              />
+              <MetricCard
+                label="Messages"
+                value={formatNumber(Number(counts.totalMessages || 0))}
+              />
+            </div>
+
+            <div className="support-search-toolbar">
+              <label>
+                Search conversations
+                <input
+                  onChange={(event) =>
+                    setFilters((current) => ({
+                      ...current,
+                      supportChatSearch: event.target.value,
+                    }))
+                  }
+                  placeholder="Name, phone, email, or message text"
+                  value={filters.supportChatSearch}
+                />
+              </label>
+            </div>
+
+            <div className="support-desk">
+              <div className="support-thread-list">
+                {loadingSections["support-chat"] && !supportChatThreads.length ? (
+                  <LoadingCard message="Refreshing conversations..." />
+                ) : supportChatThreads.length ? (
+                  supportChatThreads.map((thread: AnyRecord) => {
+                    const threadUserId = String(thread.user_id);
+                    const isSelected = threadUserId === String(selectedSupportChatThread?.user_id || "");
+
+                    return (
+                      <button
+                        className={`support-thread-card ${isSelected ? "active" : ""}`}
+                        key={threadUserId}
+                        onClick={() => setSelectedSupportChatUserId(threadUserId)}
+                        type="button"
+                      >
+                        <div className="support-thread-head">
+                          <strong>{thread.user?.full_name || "Unknown user"}</strong>
+                          {thread.awaiting_reply ? (
+                            <span className="thread-unread-badge">Awaiting</span>
+                          ) : (
+                            <span className="thread-time">
+                              {formatDateTime(thread.last_activity_at)}
+                            </span>
+                          )}
+                        </div>
+                        <div className="thread-preview">{thread.latest_preview || "No messages yet"}</div>
+                        <div className="tag-set">
+                          <Pill
+                            label={thread.user?.role === "driver" ? "Driver" : "Customer"}
+                            tone={thread.user?.role === "driver" ? "info" : "neutral"}
+                          />
+                          <Pill
+                            label={`${formatNumber(Number(thread.message_count || 0))} messages`}
+                            tone="neutral"
+                          />
+                        </div>
+                      </button>
+                    );
+                  })
+                ) : (
+                  <EmptyState
+                    message="Nobody has messaged support yet, or the search matched nothing."
+                    title="No conversations"
+                  />
+                )}
+              </div>
+
+              <div className="support-thread-workspace">
+                <Subcard
+                  eyebrow="Direct support thread"
+                  title={
+                    selectedSupportChatThread
+                      ? selectedSupportChatThread.user?.full_name || "Support conversation"
+                      : "Support conversation"
+                  }
+                >
+                  {!selectedSupportChatThread ? (
+                    <EmptyState
+                      message="Choose a conversation from the list to read it and reply."
+                      title="No conversation selected"
+                    />
+                  ) : (
+                    <>
+                      <div className="detail-grid">
+                        <div className="detail-field">
+                          <span className="detail-section-label">Phone</span>
+                          <strong>{selectedSupportChatThread.user?.phone || "N/A"}</strong>
+                        </div>
+                        <div className="detail-field">
+                          <span className="detail-section-label">Email</span>
+                          <strong>{selectedSupportChatThread.user?.email || "N/A"}</strong>
+                        </div>
+                        <div className="detail-field">
+                          <span className="detail-section-label">Last activity</span>
+                          <strong>{formatDateTime(selectedSupportChatThread.last_activity_at)}</strong>
+                        </div>
+                      </div>
+
+                      <div className="support-transcript">
+                        {transcript.length ? (
+                          transcript.map((entry: AnyRecord, index: number) => (
+                            <div
+                              className={`support-entry ${
+                                entry.sender_role === "agent" ? "agent" : "customer"
+                              }`}
+                              key={String(entry.id || index)}
+                            >
+                              <div className="support-entry-head">
+                                <strong>
+                                  {entry.sender_role === "agent"
+                                    ? "Drop support"
+                                    : selectedSupportChatThread.user?.full_name || "User"}
+                                </strong>
+                                <span>{formatDateTime(entry.created_at)}</span>
+                              </div>
+                              <p>{entry.content || "[image message]"}</p>
+                              {entry.image_url ? (
+                                <a
+                                  className="support-image-link"
+                                  href={entry.image_url}
+                                  rel="noreferrer"
+                                  target="_blank"
+                                >
+                                  View image attachment
+                                </a>
+                              ) : null}
+                            </div>
+                          ))
+                        ) : (
+                          <EmptyState
+                            message="This conversation has no messages yet."
+                            title="No transcript"
+                          />
+                        )}
+                      </div>
+
+                      <form className="auth-form" onSubmit={submitSupportChatReply}>
+                        <label>
+                          Reply as Drop support
+                          <textarea
+                            onChange={(event) => setSupportChatReply(event.target.value)}
+                            placeholder="Type your reply. It appears in the user's in-app support thread."
+                            rows={4}
+                            value={supportChatReply}
+                          />
+                        </label>
+                        {supportChatError ? (
+                          <p className="support-card-note">{supportChatError}</p>
+                        ) : null}
+                        <button
+                          className="primary-button"
+                          disabled={supportChatSending || !supportChatReply.trim()}
+                          type="submit"
+                        >
+                          {supportChatSending ? "Sending..." : "Send reply"}
+                        </button>
+                      </form>
+                    </>
+                  )}
+                </Subcard>
+              </div>
+            </div>
+          </>
+        )}
+      </PanelShell>
+    );
+  };
+
   const renderAccessSection = () => (
     <PanelShell descriptor={sectionDescriptors.access} lastRefresh={lastRefresh.access}>
       {loadingSections.access && !access ? (
@@ -7078,6 +7373,8 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
         return renderPartnersSection();
       case "support":
         return renderSupportSection();
+      case "support-chat":
+        return renderSupportChatSection();
       case "access":
         return renderAccessSection();
       case "settings":
