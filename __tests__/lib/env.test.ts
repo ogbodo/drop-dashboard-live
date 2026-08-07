@@ -14,7 +14,14 @@ const ENV_KEYS = [
   "NEXT_PUBLIC_SUPABASE_ANON_KEY",
   "NEXT_PUBLIC_SUPABASE_FUNCTION_URL",
   "NEXT_PUBLIC_DASHBOARD_FUNCTION_NAME",
+  // Read by the deployment/backend mismatch guard.
+  "VERCEL_ENV",
+  "NEXT_PUBLIC_VERCEL_ENV",
+  "DASHBOARD_ALLOW_BACKEND_MISMATCH",
 ] as const;
+
+const DEV_URL = "https://bvrfhqllbvqkocfkduhy.supabase.co";
+const PROD_URL = "https://wumhtdhmntjvicsiiovu.supabase.co";
 
 const ORIGINAL: Record<string, string | undefined> = {};
 
@@ -144,5 +151,82 @@ describe("assertDashboardEnv", () => {
     expect(() => mod.assertDashboardEnv()).toThrow(
       "NEXT_PUBLIC_SUPABASE_FUNCTION_URL is not configured.",
     );
+  });
+});
+
+describe("resolveSupabaseTarget", () => {
+  it("recognises the dev and prod project refs", () => {
+    const mod = loadWith({});
+    expect(mod.resolveSupabaseTarget(DEV_URL)).toBe("dev");
+    expect(mod.resolveSupabaseTarget(PROD_URL)).toBe("prod");
+  });
+
+  it("returns 'unknown' for an empty, malformed or unrecognised URL", () => {
+    const mod = loadWith({});
+    expect(mod.resolveSupabaseTarget("")).toBe("unknown");
+    expect(mod.resolveSupabaseTarget("not a url")).toBe("unknown");
+    expect(mod.resolveSupabaseTarget("https://someotherref.supabase.co")).toBe("unknown");
+  });
+
+  it("exposes the resolved target on env.supabaseTarget", () => {
+    expect(loadWith({ NEXT_PUBLIC_SUPABASE_URL: PROD_URL }).env.supabaseTarget).toBe("prod");
+    expect(loadWith({ NEXT_PUBLIC_SUPABASE_URL: DEV_URL }).env.supabaseTarget).toBe("dev");
+  });
+});
+
+describe("assertBackendMatchesDeployment", () => {
+  it("refuses a preview deployment wired to the PROD project", () => {
+    const mod = loadWith({ NEXT_PUBLIC_SUPABASE_URL: PROD_URL, VERCEL_ENV: "preview" });
+    expect(() => mod.assertBackendMatchesDeployment()).toThrow(/preview.*PRODUCTION project/s);
+  });
+
+  it("refuses a development deployment wired to the PROD project", () => {
+    const mod = loadWith({ NEXT_PUBLIC_SUPABASE_URL: PROD_URL, VERCEL_ENV: "development" });
+    expect(() => mod.assertBackendMatchesDeployment()).toThrow(/PRODUCTION project/);
+  });
+
+  it("allows a production deployment on the prod project", () => {
+    const mod = loadWith({ NEXT_PUBLIC_SUPABASE_URL: PROD_URL, VERCEL_ENV: "production" });
+    expect(() => mod.assertBackendMatchesDeployment()).not.toThrow();
+  });
+
+  it("allows a preview deployment on the dev project", () => {
+    const mod = loadWith({ NEXT_PUBLIC_SUPABASE_URL: DEV_URL, VERCEL_ENV: "preview" });
+    expect(() => mod.assertBackendMatchesDeployment()).not.toThrow();
+  });
+
+  it("warns but does NOT throw when production is wired to dev (would take the live dashboard down)", () => {
+    const spy = jest.spyOn(console, "error").mockImplementation(() => {});
+    const mod = loadWith({ NEXT_PUBLIC_SUPABASE_URL: DEV_URL, VERCEL_ENV: "production" });
+    expect(() => mod.assertBackendMatchesDeployment()).not.toThrow();
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("production deployment is pointed at the DEV"));
+    spy.mockRestore();
+  });
+
+  it("stays quiet when there is no Vercel metadata (local dev)", () => {
+    const mod = loadWith({ NEXT_PUBLIC_SUPABASE_URL: PROD_URL });
+    expect(() => mod.assertBackendMatchesDeployment()).not.toThrow();
+  });
+
+  it("stays quiet for an unrecognised project ref", () => {
+    const mod = loadWith({
+      NEXT_PUBLIC_SUPABASE_URL: "https://someotherref.supabase.co",
+      VERCEL_ENV: "preview",
+    });
+    expect(() => mod.assertBackendMatchesDeployment()).not.toThrow();
+  });
+
+  it("can be bypassed with DASHBOARD_ALLOW_BACKEND_MISMATCH=true", () => {
+    const mod = loadWith({
+      NEXT_PUBLIC_SUPABASE_URL: PROD_URL,
+      VERCEL_ENV: "preview",
+      DASHBOARD_ALLOW_BACKEND_MISMATCH: "true",
+    });
+    expect(() => mod.assertBackendMatchesDeployment()).not.toThrow();
+  });
+
+  it("is enforced through assertDashboardEnv, not just in isolation", () => {
+    const mod = loadWith({ NEXT_PUBLIC_SUPABASE_URL: PROD_URL, VERCEL_ENV: "preview" });
+    expect(() => mod.assertDashboardEnv()).toThrow(/PRODUCTION project/);
   });
 });
