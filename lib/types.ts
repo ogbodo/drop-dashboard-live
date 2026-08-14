@@ -27,6 +27,8 @@ export type DashboardSession = {
 
 export type DashboardActionName =
   | "cancel_ride"
+  | "list_safety_alerts"
+  | "update_safety_alert"
   | "update_ride_follow_up"
   | "update_driver"
   | "grant_driver_subscription"
