@@ -56,6 +56,44 @@ const callAction = async (action: string, payload: Record<string, unknown> = {})
   return res.json();
 };
 
+/**
+ * An actual audible tone, synthesised.
+ *
+ * This was a base64 WAV until a review noticed it was 56 bytes of silence — the
+ * alarm made no sound at all, and every check of it had been reading the code
+ * rather than listening. WebAudio needs no asset and cannot be silently wrong in
+ * the same way: two short rising beeps, deliberately unlike a notification chime.
+ */
+const sound = () => {
+  try {
+    const Ctor =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext?: typeof AudioContext })
+        .webkitAudioContext;
+    if (!Ctor) return;
+    const ctx = new Ctor();
+
+    [0, 0.28].forEach((offset, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = i === 0 ? 660 : 880;
+      gain.gain.setValueAtTime(0.0001, ctx.currentTime + offset);
+      gain.gain.exponentialRampToValueAtTime(0.32, ctx.currentTime + offset + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + offset + 0.22);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(ctx.currentTime + offset);
+      osc.stop(ctx.currentTime + offset + 0.24);
+    });
+
+    setTimeout(() => void ctx.close(), 1200);
+  } catch {
+    // Autoplay policy refuses until the operator has interacted with the page.
+    // The visual alarm never depended on this.
+  }
+};
+
 const sinceLabel = (iso: string) => {
   const mins = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
   if (mins < 1) return "just now";
@@ -85,15 +123,7 @@ export default function SafetyAlertBubble() {
       if (fresh.length) {
         fresh.forEach((a) => announced.current.add(a.id));
         setOpen(true);
-        try {
-          new Audio(
-            "data:audio/wav;base64,UklGRlwAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YTgAAAAA" +
-              "AAB/f39/f39/f39/f39/f39/f39/f39/f39/f39/f39/f39/f39/f39/f39/f39/f39/",
-          ).play();
-        } catch {
-          // Autoplay policy may refuse until the operator has interacted with
-          // the page. The visual alarm does not depend on it.
-        }
+        sound();
       }
     } catch {
       // A failed poll is a bad moment on the network. The next one is 10s away,
