@@ -9,6 +9,7 @@ import {
   getDriversData,
   getFinanceData,
   getLiveOpsData,
+  getSafetyAlerts,
   getOverviewData,
   getPartnersData,
   getPartnerWorkspaceData,
@@ -32,6 +33,7 @@ import {
   updatePartnerCommission,
   updateReport,
   updateRideFollowUp,
+  updateSafetyAlert,
   updateServiceType,
 } from "../../../lib/dashboard-data.js";
 import {
@@ -48,6 +50,8 @@ type AnyRecord = Record<string, any>;
 
 type DashboardActionName =
   | "cancel_ride"
+  | "list_safety_alerts"
+  | "update_safety_alert"
   | "update_ride_follow_up"
   | "update_driver"
   | "grant_driver_subscription"
@@ -1666,6 +1670,27 @@ const handleAction = async (request: Request) => {
       return jsonSuccess(
         await sendSupportInboxReply(supabaseAdmin, session, payload),
       );
+    case "list_safety_alerts":
+      // Staff, not just leadership. An emergency is the wrong moment to
+      // discover that the only person who can open the alert is asleep.
+      requireTeamOperator(session);
+      return jsonSuccess({
+        alerts: await getSafetyAlerts(supabaseAdmin, {
+          includeResolved: Boolean(payload.includeResolved),
+        }),
+      });
+
+    case "update_safety_alert":
+      requireTeamOperator(session);
+      return jsonSuccess({
+        alert: await updateSafetyAlert(
+          supabaseAdmin,
+          String(payload.alertId || ""),
+          payload,
+          session,
+        ),
+      });
+
     case "cancel_ride":
       requireLeadership(session);
       return jsonSuccess(
