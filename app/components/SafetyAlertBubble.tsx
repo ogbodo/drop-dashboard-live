@@ -23,6 +23,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
  */
 
 const POLL_MS = 10000;
+// Three consecutive misses, so roughly 30 seconds. One failed poll is a network
+// blip and shouting about it would train operators to ignore this corner of the
+// screen; half a minute of silence from the safety feed is worth saying out loud.
+const FAILURE_THRESHOLD = 3;
 
 type Alert = {
   id: string;
@@ -109,12 +113,18 @@ export default function SafetyAlertBubble() {
   const [busy, setBusy] = useState<string | null>(null);
   const [, forceTick] = useState(0);
   const announced = useRef<Set<string>>(new Set());
+  // How the feed itself is doing, which is a separate question from whether
+  // there are alerts — and one this component used to have no way of answering.
+  const [misses, setMisses] = useState(0);
+  const [lastOkAt, setLastOkAt] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     try {
       const data = await callAction("list_safety_alerts");
       const next: Alert[] = data?.alerts ?? data?.data?.alerts ?? [];
       setAlerts(next);
+      setMisses(0);
+      setLastOkAt(Date.now());
 
       // Announce each alert once, and open the panel the first time one lands.
       // An operator looking at another tab gets a sound; one looking at this
@@ -126,8 +136,10 @@ export default function SafetyAlertBubble() {
         sound();
       }
     } catch {
-      // A failed poll is a bad moment on the network. The next one is 10s away,
-      // and going quiet about existing alerts would be worse than stale ones.
+      // Alerts already on screen are kept: going quiet about a live emergency
+      // because one poll failed would be worse than showing a stale one. But the
+      // failure is counted, and once it is sustained the operator is told.
+      setMisses((n) => n + 1);
     }
   }, []);
 
@@ -153,9 +165,61 @@ export default function SafetyAlertBubble() {
     }
   };
 
-  if (!alerts.length) return null;
-
   const unacknowledged = alerts.filter((a) => a.status === "open");
+  const feedFailing = misses >= FAILURE_THRESHOLD;
+
+  // The old behaviour was `if (!alerts.length) return null`, and it is the reason
+  // a real SOS took a database query to find. Three states rendered as absolutely
+  // nothing: no alerts, the feed broken, and the component not in the build at
+  // all. An operator looking at a quiet screen could not tell which — and on the
+  // one feature where silence IS the failure mode, that is backwards.
+  //
+  // So something is always on screen. A muted "monitoring" pill when all is well,
+  // which is deliberately dull and does not pulse or make noise; a loud one when
+  // the feed has stopped answering. If the corner is now completely empty, the
+  // component is not running, and that is a fact worth being able to see.
+  if (!alerts.length) {
+    return (
+      <div
+        style={{
+          position: "fixed",
+          right: 20,
+          bottom: 20,
+          zIndex: 9998,
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          padding: feedFailing ? "11px 16px" : "8px 14px",
+          borderRadius: 999,
+          fontWeight: feedFailing ? 700 : 500,
+          fontSize: feedFailing ? 13 : 12,
+          color: feedFailing ? "#fff" : "#6B7280",
+          background: feedFailing ? "#8A6D0B" : "#F3F4F6",
+          border: feedFailing ? "none" : "1px solid #E5E7EB",
+          boxShadow: feedFailing
+            ? "0 10px 30px rgba(0,0,0,.32)"
+            : "0 2px 8px rgba(0,0,0,.06)",
+        }}
+        title={
+          feedFailing
+            ? "The dashboard cannot reach the safety feed. Alerts raised now may not appear."
+            : "Safety alerts are being checked every 10 seconds."
+        }
+      >
+        <span aria-hidden style={{ fontSize: feedFailing ? 15 : 13 }}>
+          {feedFailing ? "\u26A0\uFE0F" : "\u{1F6E1}\uFE0F"}
+        </span>
+        {feedFailing ? (
+          <span role="alert">
+            Safety feed unavailable
+            {lastOkAt ? ` \u00B7 last seen ${sinceLabel(new Date(lastOkAt).toISOString())}` : ""}
+          </span>
+        ) : (
+          <span>No active alerts</span>
+        )}
+      </div>
+    );
+  }
 
   return (
     <>
