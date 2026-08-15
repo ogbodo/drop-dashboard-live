@@ -120,13 +120,17 @@ export default function SafetyAlertBubble() {
   // The last day, closed ones included. Only fetched while the panel is open —
   // a shift handover wants it, a 10-second poll does not.
   const [recent, setRecent] = useState<Alert[]>([]);
-  const openRef = useRef(false);
-  openRef.current = open;
 
-  const load = useCallback(async () => {
+  // `withRecent` is passed explicitly rather than read from the open state,
+  // because the poll and the panel want different things: the poll wants the
+  // short active list every ten seconds, and the day of history is only worth
+  // fetching at the moment somebody actually opens the panel. Deriving it from
+  // `open` meant a 24-hour query on every tick for as long as the panel stayed
+  // up, which is not what the comment claimed and not what was wanted.
+  const load = useCallback(async (withRecent = false) => {
     try {
       const data = await callAction("list_safety_alerts", {
-        includeRecent: openRef.current,
+        includeRecent: withRecent,
       });
       const next: Alert[] = data?.alerts ?? data?.data?.alerts ?? [];
       setAlerts(next);
@@ -154,7 +158,8 @@ export default function SafetyAlertBubble() {
 
   useEffect(() => {
     void load();
-    const timer = setInterval(load, POLL_MS);
+    // Wrapped, so the timer's own argument can never arrive as `withRecent`.
+    const timer = setInterval(() => void load(), POLL_MS);
     // Re-render every 15s so the "how long has this been open" clock stays true
     // without another network call.
     const clock = setInterval(() => forceTick((n) => n + 1), 15000);
@@ -165,14 +170,16 @@ export default function SafetyAlertBubble() {
   }, [load]);
 
   useEffect(() => {
-    if (open) void load();
+    if (open) void load(true);
   }, [open, load]);
 
   const act = async (alertId: string, payload: Record<string, unknown>) => {
     setBusy(alertId);
     try {
       await callAction("update_safety_alert", { alertId, ...payload });
-      await load();
+      // With history: closing an alert moves it out of the active list and into
+      // the last-24-hours section, and both should update together.
+      await load(true);
     } finally {
       setBusy(null);
     }
