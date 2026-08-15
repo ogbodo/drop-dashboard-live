@@ -117,12 +117,21 @@ export default function SafetyAlertBubble() {
   // there are alerts — and one this component used to have no way of answering.
   const [misses, setMisses] = useState(0);
   const [lastOkAt, setLastOkAt] = useState<number | null>(null);
+  // The last day, closed ones included. Only fetched while the panel is open —
+  // a shift handover wants it, a 10-second poll does not.
+  const [recent, setRecent] = useState<Alert[]>([]);
+  const openRef = useRef(false);
+  openRef.current = open;
 
   const load = useCallback(async () => {
     try {
-      const data = await callAction("list_safety_alerts");
+      const data = await callAction("list_safety_alerts", {
+        includeRecent: openRef.current,
+      });
       const next: Alert[] = data?.alerts ?? data?.data?.alerts ?? [];
       setAlerts(next);
+      const history: Alert[] | undefined = data?.recent ?? data?.data?.recent;
+      if (history) setRecent(history);
       setMisses(0);
       setLastOkAt(Date.now());
 
@@ -155,6 +164,10 @@ export default function SafetyAlertBubble() {
     };
   }, [load]);
 
+  useEffect(() => {
+    if (open) void load();
+  }, [open, load]);
+
   const act = async (alertId: string, payload: Record<string, unknown>) => {
     setBusy(alertId);
     try {
@@ -166,6 +179,10 @@ export default function SafetyAlertBubble() {
   };
 
   const unacknowledged = alerts.filter((a) => a.status === "open");
+  // Said they were safe, still nobody has closed it. Not an emergency any more —
+  // so no red, no pulse, no sound — but it stays here until an operator looks.
+  const awaitingReview = alerts.filter((a) => a.status === "stood_down");
+  const liveEmergency = alerts.length > awaitingReview.length;
   const feedFailing = misses >= FAILURE_THRESHOLD;
 
   // The old behaviour was `if (!alerts.length) return null`, and it is the reason
@@ -242,15 +259,21 @@ export default function SafetyAlertBubble() {
           color: "#fff",
           fontWeight: 700,
           fontSize: 14,
-          background: unacknowledged.length ? "#B00020" : "#8A6D0B",
+          background: unacknowledged.length
+            ? "#B00020"
+            : liveEmergency
+              ? "#8A6D0B"
+              : "#4B5563",
           boxShadow: "0 10px 30px rgba(0,0,0,.32)",
           animation: unacknowledged.length ? "sosPulse 1.4s ease-in-out infinite" : "none",
         }}
       >
-        <span style={{ fontSize: 16 }}>🚨</span>
+        <span style={{ fontSize: 16 }}>{liveEmergency ? "🚨" : "📋"}</span>
         {unacknowledged.length
           ? `${unacknowledged.length} SOS needs attention`
-          : `${alerts.length} alert${alerts.length === 1 ? "" : "s"} in progress`}
+          : liveEmergency
+            ? `${alerts.length} alert${alerts.length === 1 ? "" : "s"} in progress`
+            : `${awaitingReview.length} stood down, needs closing`}
       </button>
 
       <style>{`
@@ -297,6 +320,23 @@ export default function SafetyAlertBubble() {
                   </span>
                 </div>
 
+                {alert.status === "stood_down" ? (
+                  <div
+                    style={{
+                      marginTop: 8,
+                      padding: "7px 10px",
+                      borderRadius: 8,
+                      background: "#F3F4F6",
+                      color: "#374151",
+                      fontSize: 12,
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    <strong>They say they are safe.</strong> Still open for you to
+                    check and close — the app cannot close it.
+                  </div>
+                ) : null}
+
                 <div style={{ fontSize: 12.5, color: "#374151", marginTop: 8, lineHeight: 1.65 }}>
                   {alert.person?.phone ? (
                     <div>
@@ -306,7 +346,7 @@ export default function SafetyAlertBubble() {
 
                   {alert.emergencyContact?.phone ? (
                     <div>
-                      Emergency contact: {alert.emergencyContact.name || "—"}
+                      Emergency contact: {alert.emergencyContact.name || "Name not given"}
                       {alert.emergencyContact.relationship
                         ? ` (${alert.emergencyContact.relationship})`
                         : ""}{" "}
@@ -399,11 +439,84 @@ export default function SafetyAlertBubble() {
               </div>
             );
           })}
+
+          {/* What happened, whether or not it still needs anyone.
+              getSafetyAlerts deliberately returns only what is outstanding, so
+              before this the dashboard could not show a closed alert at all —
+              includeResolved existed in dashboard-data.js and in drop-admin and
+              no screen ever passed it. Someone coming on shift could not see
+              that three SOS alerts had been raised overnight. */}
+          <div style={{ padding: "14px 16px", background: "#FAFAFA" }}>
+            <div
+              style={{
+                fontSize: 11,
+                fontWeight: 700,
+                letterSpacing: 0.6,
+                color: "#6B7280",
+                textTransform: "uppercase",
+              }}
+            >
+              Last 24 hours
+            </div>
+
+            {recent.length === 0 ? (
+              <div style={{ fontSize: 12.5, color: "#6B7280", marginTop: 8 }}>
+                Nothing raised in the last day.
+              </div>
+            ) : (
+              recent.map((item) => (
+                <div
+                  key={`recent-${item.id}`}
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    gap: 10,
+                    fontSize: 12.5,
+                    color: "#374151",
+                    padding: "7px 0",
+                    borderBottom: "1px solid #EFEFEF",
+                  }}
+                >
+                  <span>
+                    {item.raised_by_role === "driver" ? "Driver" : "Rider"}
+                    {item.person?.fullName ? ` · ${item.person.fullName}` : ""}
+                  </span>
+                  <span style={{ color: statusColour(item.status), fontWeight: 600 }}>
+                    {statusLabel(item.status)} · {sinceLabel(item.created_at)}
+                  </span>
+                </div>
+              ))
+            )}
+          </div>
         </div>
       ) : null}
     </>
   );
 }
+
+/** Plain words, because an operator should not have to learn the enum. */
+const statusLabel = (status: string) => {
+  switch (status) {
+    case "open":
+      return "Still open";
+    case "acknowledged":
+      return "Being handled";
+    case "stood_down":
+      return "Stood down, not closed";
+    case "false_alarm":
+      return "False alarm";
+    case "resolved":
+      return "Closed";
+    default:
+      return status;
+  }
+};
+
+const statusColour = (status: string) => {
+  if (status === "open") return "#B00020";
+  if (status === "acknowledged" || status === "stood_down") return "#8A6D0B";
+  return "#6B7280";
+};
 
 const btn = (bg: string, color: string, outlined = false) => ({
   padding: "7px 11px",
