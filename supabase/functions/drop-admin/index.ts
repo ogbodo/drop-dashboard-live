@@ -9,6 +9,8 @@ import {
   getDriversData,
   getFinanceData,
   getLiveOpsData,
+  getRecentSafetyAlerts,
+  getSafetyAlerts,
   getOverviewData,
   getPartnersData,
   getPartnerWorkspaceData,
@@ -32,6 +34,7 @@ import {
   updatePartnerCommission,
   updateReport,
   updateRideFollowUp,
+  updateSafetyAlert,
   updateServiceType,
 } from "../../../lib/dashboard-data.js";
 import {
@@ -48,6 +51,8 @@ type AnyRecord = Record<string, any>;
 
 type DashboardActionName =
   | "cancel_ride"
+  | "list_safety_alerts"
+  | "update_safety_alert"
   | "update_ride_follow_up"
   | "update_driver"
   | "grant_driver_subscription"
@@ -1666,6 +1671,32 @@ const handleAction = async (request: Request) => {
       return jsonSuccess(
         await sendSupportInboxReply(supabaseAdmin, session, payload),
       );
+    case "list_safety_alerts":
+      // Staff, not just leadership. An emergency is the wrong moment to
+      // discover that the only person who can open the alert is asleep.
+      requireTeamOperator(session);
+      return jsonSuccess({
+        alerts: await getSafetyAlerts(supabaseAdmin, {
+          includeResolved: Boolean(payload.includeResolved),
+        }),
+        // Only when asked, which is when the panel is open — the bubble polls
+        // every ten seconds and does not need a day of history each time.
+        recent: payload.includeRecent
+          ? await getRecentSafetyAlerts(supabaseAdmin, {})
+          : undefined,
+      });
+
+    case "update_safety_alert":
+      requireTeamOperator(session);
+      return jsonSuccess({
+        alert: await updateSafetyAlert(
+          supabaseAdmin,
+          String(payload.alertId || ""),
+          payload,
+          session,
+        ),
+      });
+
     case "cancel_ride":
       requireLeadership(session);
       return jsonSuccess(
