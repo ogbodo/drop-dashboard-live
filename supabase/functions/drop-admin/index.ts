@@ -9,6 +9,7 @@ import {
   getDriversData,
   getFinanceData,
   getLiveOpsData,
+  getRecentSafetyAlerts,
   getSafetyAlerts,
   getOverviewData,
   getPartnersData,
@@ -1678,6 +1679,11 @@ const handleAction = async (request: Request) => {
         alerts: await getSafetyAlerts(supabaseAdmin, {
           includeResolved: Boolean(payload.includeResolved),
         }),
+        // Only when asked, which is when the panel is open — the bubble polls
+        // every ten seconds and does not need a day of history each time.
+        recent: payload.includeRecent
+          ? await getRecentSafetyAlerts(supabaseAdmin, {})
+          : undefined,
       });
 
     case "update_safety_alert":
