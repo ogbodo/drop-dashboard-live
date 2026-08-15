@@ -32,7 +32,16 @@ type Alert = {
   id: string;
   raised_by_role: "customer" | "driver";
   kind: string;
-  status: string;
+  // Named rather than `string`: the whole component branches on this, and a
+  // typo in one of those comparisons would silently render the wrong state
+  // forever. 'stood_down' means the person said they were safe and an operator
+  // has still to close it.
+  status:
+    | "open"
+    | "acknowledged"
+    | "stood_down"
+    | "resolved"
+    | "false_alarm";
   latitude: number | null;
   longitude: number | null;
   created_at: string;
