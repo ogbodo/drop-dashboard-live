@@ -50,6 +50,15 @@ type Alert = {
   emergency_contact_called_at: string | null;
   person: { fullName: string | null; phone: string | null } | null;
   emergencyContact: { name: string | null; phone: string | null; relationship: string | null } | null;
+  // The other person on the trip: the driver when a rider raised it, the rider
+  // when a driver did. Null when no driver has accepted yet.
+  counterpart: {
+    id: string;
+    fullName: string | null;
+    phone: string | null;
+    role: "driver" | "customer";
+    vehicle: { plate: string | null; description: string | null } | null;
+  } | null;
   ride: {
     id: string;
     status: string;
@@ -357,6 +366,55 @@ export default function SafetyAlertBubble() {
                   {alert.person?.phone ? (
                     <div>
                       Phone: <a href={`tel:${alert.person.phone}`}>{alert.person.phone}</a>
+                    </div>
+                  ) : null}
+
+                  {/*
+                    The other person in the car, placed directly under the caller
+                    because it is the next thing an operator asks. Highlighted, not
+                    buried in the run of detail: on a rider's alert this is the
+                    driver they are sitting with, and the plate is what you read
+                    out to someone trying to find the vehicle.
+                  */}
+                  {alert.counterpart ? (
+                    <div
+                      style={{
+                        marginTop: 6,
+                        marginBottom: 6,
+                        padding: "7px 10px",
+                        borderRadius: 8,
+                        background: "#FFF7ED",
+                        border: "1px solid #FED7AA",
+                      }}
+                    >
+                      <strong>
+                        {alert.counterpart.role === "driver" ? "Driver" : "Rider"}:{" "}
+                        {alert.counterpart.fullName || "Name not given"}
+                      </strong>
+                      {alert.counterpart.phone ? (
+                        <>
+                          {" · "}
+                          <a href={`tel:${alert.counterpart.phone}`}>
+                            {alert.counterpart.phone}
+                          </a>
+                        </>
+                      ) : null}
+                      {alert.counterpart.vehicle ? (
+                        <div style={{ marginTop: 2 }}>
+                          {alert.counterpart.vehicle.plate ? (
+                            <strong>{alert.counterpart.vehicle.plate}</strong>
+                          ) : (
+                            "No plate on file"
+                          )}
+                          {alert.counterpart.vehicle.description
+                            ? ` · ${alert.counterpart.vehicle.description}`
+                            : ""}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : alert.ride ? (
+                    <div style={{ color: "#B00020" }}>
+                      No driver assigned to this trip yet
                     </div>
                   ) : null}
 
