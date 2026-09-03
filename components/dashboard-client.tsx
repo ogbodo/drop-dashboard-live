@@ -75,6 +75,7 @@ const leadershipSectionOrder: SectionKey[] = [
   "scheduled-rides",
   "finance",
   "partners",
+  "referrals",
   "settings",
 ];
 
@@ -101,6 +102,7 @@ const filterableSections = new Set<SectionKey>([
   "customers",
   "scheduled-rides",
   "partners",
+  "referrals",
   "support",
   "support-chat",
 ]);
@@ -155,6 +157,13 @@ const sectionDescriptors: Record<SectionKey, SectionDescriptor> = {
     label: "Partners",
     title: "Partner management",
   },
+  referrals: {
+    description:
+      "Issue codes for acquisition agents and referring drivers, see who each has brought in, and settle what is owed.",
+    eyebrow: "Growth network",
+    label: "Referrals",
+    title: "Driver referrals",
+  },
   rides: {
     description:
       "Search rides, resolve payment follow-up, and intervene when a trip needs manual attention.",
@@ -207,6 +216,7 @@ const initialSectionData: Record<SectionKey, AnyRecord | AnyRecord[] | null> = {
   "live-ops": null,
   overview: null,
   partners: null,
+  referrals: null,
   rides: null,
   "scheduled-rides": null,
   settings: null,
@@ -1163,6 +1173,7 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
     customersSearch: "",
     driversSearch: "",
     partnersSearch: "",
+    referralsSearch: "",
     ridesPaymentStatus: "all",
     ridesSearch: "",
     ridesStatus: "all",
@@ -1347,6 +1358,10 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
         search: filters.scheduledSearch,
         status: filters.scheduledStatus,
       });
+    }
+
+    if (section === "referrals") {
+      return new URLSearchParams({ search: filters.referralsSearch });
     }
 
     if (section === "partners") {
@@ -5363,6 +5378,257 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
     );
   };
 
+  async function submitReferralCode(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    const code = String(form.get("code") || "").toUpperCase();
+    const ownerType = String(form.get("owner_type") || "partner");
+    const ownerId = String(form.get("owner_id") || "");
+    const months = Number(form.get("months") || 0);
+
+    await runConfirmedAction(
+      "create-referral-code",
+      {
+        confirmLabel: "Create code",
+        // The window and the rate are the whole agreement, so they are read back
+        // before anyone commits to them rather than buried in the form above.
+        message: `${code} will pay ${formatCurrency(
+          Number(form.get("commission_amount") || 500),
+        )} per referred driver who subscribes, for ${months} month${months === 1 ? "" : "s"}.`,
+        title: `Create referral code ${code}?`,
+        tone: "success",
+      },
+      async () => {
+        await adminAction("create_referral_code", {
+          code,
+          commission_amount: Number(form.get("commission_amount") || 500),
+          driver_id: ownerType === "driver" ? ownerId : null,
+          months,
+          notes: String(form.get("notes") || ""),
+          partner_id: ownerType === "partner" ? ownerId : null,
+        });
+        formElement.reset();
+        await refreshSections(["referrals"]);
+      },
+    );
+  }
+
+  async function markReferralPaid(referralId: string, who: string, amount: unknown) {
+    await runConfirmedAction(
+      `mark-referral-paid-${referralId}`,
+      {
+        confirmLabel: "Mark paid",
+        message:
+          "Only do this once the money has actually left. This records the payout and cannot be undone from here.",
+        title: `Mark ${formatCurrency(amount)} to ${who} as paid?`,
+        tone: "danger",
+      },
+      async () => {
+        await adminAction("mark_referral_paid", { referralId });
+        await refreshSections(["referrals"]);
+      },
+    );
+  }
+
+  const renderReferralsSection = () => {
+    const data = (sectionData.referrals || {}) as AnyRecord;
+    const codes = (data.codes as AnyRecord[]) || [];
+    const referrals = (data.referrals as AnyRecord[]) || [];
+    const totals = (data.totals as AnyRecord) || {};
+
+    return (
+      <PanelShell descriptor={sectionDescriptors.referrals} lastRefresh={lastRefresh.referrals}>
+        {sectionErrors.referrals ? (
+          <ErrorState message={sectionErrors.referrals} title="Referrals unavailable" />
+        ) : (
+          <>
+            <div className="stat-grid">
+              <div className="stat-card">
+                <span>Active codes</span>
+                <strong>{Number(totals.codes || 0)}</strong>
+              </div>
+              <div className="stat-card">
+                <span>Drivers signed up</span>
+                <strong>{Number(totals.signups || 0)}</strong>
+              </div>
+              <div className="stat-card">
+                <span>Converted</span>
+                <strong>{Number(totals.earned || 0)}</strong>
+              </div>
+              {/* The number the CEO asked for: what we owe right now. */}
+              <div className="stat-card">
+                <span>Owed</span>
+                <strong>{formatCurrency(totals.owed)}</strong>
+              </div>
+              <div className="stat-card">
+                <span>Paid out</span>
+                <strong>{formatCurrency(totals.paid)}</strong>
+              </div>
+            </div>
+
+            <div className="subgrid">
+              <form className="subcard" onSubmit={(event) => event.preventDefault()}>
+                <div className="subcard-header">
+                  <div>
+                    <span>Search</span>
+                    <h4>Find a code</h4>
+                  </div>
+                  <Pill label="Auto applies" tone="success" />
+                </div>
+                <div className="toolbar">
+                  <label>
+                    Search
+                    <input
+                      onChange={(event) =>
+                        setFilters((current) => ({
+                          ...current,
+                          referralsSearch: event.target.value,
+                        }))
+                      }
+                      placeholder="Code or referrer name"
+                      value={filters.referralsSearch}
+                    />
+                  </label>
+                </div>
+              </form>
+
+              <form className="subcard" onSubmit={(event) => void submitReferralCode(event)}>
+                <div className="subcard-header">
+                  <div>
+                    <span>Create</span>
+                    <h4>New referral code</h4>
+                  </div>
+                  <button
+                    className="primary-button"
+                    disabled={isActionPending("create-referral-code")}
+                    type="submit"
+                  >
+                    {isActionPending("create-referral-code") ? "Creating..." : "Create code"}
+                  </button>
+                </div>
+                <div className="form-grid">
+                  <label>
+                    Code
+                    <input
+                      name="code"
+                      pattern="[A-Za-z0-9]{4,16}"
+                      placeholder="JOHN500"
+                      required
+                      title="4 to 16 letters or digits"
+                    />
+                  </label>
+                  <label>
+                    Belongs to
+                    <select defaultValue="partner" name="owner_type">
+                      <option value="partner">Acquisition agent (partner)</option>
+                      <option value="driver">A driver</option>
+                    </select>
+                  </label>
+                  <label>
+                    Owner ID
+                    <input name="owner_id" placeholder="partner or driver uuid" required />
+                  </label>
+                  <label>
+                    Pays per subscribed driver
+                    <input defaultValue={500} min={0} name="commission_amount" type="number" />
+                  </label>
+                  {/* No default. Three months for the lead agent and one for a
+                      driver is the entire difference between the two deals. */}
+                  <label>
+                    Window (months)
+                    <input max={24} min={1} name="months" placeholder="3" required type="number" />
+                  </label>
+                  <label>
+                    Notes
+                    <input name="notes" placeholder="Optional" />
+                  </label>
+                </div>
+              </form>
+            </div>
+
+            <DataTable
+              columns={[
+                { label: "Code", render: (row) => String(row.code || "") },
+                { label: "Referrer", render: (row) => String(row.referrer_name || "Unknown") },
+                { label: "Type", render: (row) => String(row.referrer_type || "") },
+                { label: "Rate", render: (row) => formatCurrency(row.rate) },
+                { label: "Signed up", render: (row) => String(row.signups ?? 0) },
+                { label: "Converted", render: (row) => String(row.earned_count ?? 0) },
+                { label: "Owed", render: (row) => formatCurrency(row.owed_amount) },
+                {
+                  label: "Window ends",
+                  render: (row) =>
+                    row.ends_at ? new Date(String(row.ends_at)).toLocaleDateString() : "—",
+                },
+              ]}
+              emptyMessage="No referral codes yet. Create one above to start the campaign."
+              isLoading={loadingSections.referrals}
+              rows={codes}
+            />
+
+            <div className="subcard">
+              <div className="subcard-header">
+                <div>
+                  <span>Detail</span>
+                  <h4>Referred drivers</h4>
+                </div>
+              </div>
+              <DataTable
+                columns={[
+                  { label: "Driver", render: (row) => String(row.referred_name || "Unknown") },
+                  { label: "Phone", render: (row) => String(row.referred_phone || "—") },
+                  {
+                    label: "Signed up",
+                    render: (row) =>
+                      row.signed_up_at
+                        ? new Date(String(row.signed_up_at)).toLocaleDateString()
+                        : "—",
+                  },
+                  { label: "Status", render: (row) => String(row.status || "") },
+                  {
+                    label: "Amount",
+                    render: (row) =>
+                      row.commission_amount ? formatCurrency(row.commission_amount) : "—",
+                  },
+                  {
+                    // Rejections carry a reason from the trigger; showing it stops
+                    // "why did this one not pay" becoming a support thread.
+                    label: "Note",
+                    render: (row) => String(row.rejected_reason || ""),
+                  },
+                  {
+                    label: "",
+                    render: (row) =>
+                      row.status === "earned" ? (
+                        <button
+                          className="ghost-button"
+                          disabled={isActionPending(`mark-referral-paid-${row.id}`)}
+                          onClick={() =>
+                            void markReferralPaid(
+                              String(row.id),
+                              String(row.referred_name || "this referrer"),
+                              row.commission_amount,
+                            )
+                          }
+                          type="button"
+                        >
+                          Mark paid
+                        </button>
+                      ) : null,
+                  },
+                ]}
+                emptyMessage="No drivers referred yet."
+                isLoading={loadingSections.referrals}
+                rows={referrals}
+              />
+            </div>
+          </>
+        )}
+      </PanelShell>
+    );
+  };
+
   const renderPartnersSection = () => (
     <PanelShell descriptor={sectionDescriptors.partners} lastRefresh={lastRefresh.partners}>
       {sectionErrors.partners ? (
@@ -7554,6 +7820,8 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
         return renderFinanceSection();
       case "partners":
         return renderPartnersSection();
+      case "referrals":
+        return renderReferralsSection();
       case "support":
         return renderSupportSection();
       case "support-chat":

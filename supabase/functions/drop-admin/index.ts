@@ -3,6 +3,7 @@ import {
   cancelScheduledRideAsAdmin,
   createCancelReason,
   createPartner,
+  createReferralCode,
   createServiceType,
   getAccessData,
   getCustomersData,
@@ -13,8 +14,10 @@ import {
   getSafetyAlerts,
   getOverviewData,
   getPartnersData,
+  getReferralsData,
   getPartnerWorkspaceData,
   getRidesData,
+  markReferralPaid,
   getScheduledRidesData,
   getSettingsData,
   getSupportData,
@@ -59,6 +62,7 @@ type DashboardActionName =
   | "update_customer"
   | "cancel_scheduled_ride"
   | "create_partner"
+  | "create_referral_code"
   | "update_partner"
   | "update_partner_branding"
   | "update_partner_commission"
@@ -73,6 +77,7 @@ type DashboardActionName =
   | "create_admin"
   | "create_staff"
   | "create_partner_access"
+  | "mark_referral_paid"
   | "reset_password"
   | "toggle_account_status"
   | "send_support_reply"
@@ -185,6 +190,11 @@ const leadershipSections = new Set<DashboardSectionName>([
   "scheduled-rides",
   "finance",
   "partners",
+  // Leadership only, and its absence from staffSections below is the point:
+  // this is what every agent is owed. TypeScript does not police a Set the way
+  // it polices a Record, so adding a section to the union does NOT force it to
+  // be listed here -- which is exactly how it came to be missing.
+  "referrals",
   "support",
   "support-chat",
   "settings",
@@ -1201,6 +1211,10 @@ const adminSectionHandlers: Record<
       limit: new URL(request.url).searchParams.get("limit"),
       search: new URL(request.url).searchParams.get("search"),
     }),
+  referrals: async (request) =>
+    getReferralsData(supabaseAdmin, {
+      search: new URL(request.url).searchParams.get("search"),
+    }),
   rides: async (request, session) =>
     getRidesData(supabaseAdmin, {
       limit: new URL(request.url).searchParams.get("limit"),
@@ -1742,6 +1756,16 @@ const handleAction = async (request: Request) => {
     case "create_partner":
       requireLeadership(session);
       return jsonSuccess(await createPartner(supabaseAdmin, payload));
+    // Leadership only, both: one decides who earns and at what rate, the other
+    // says money has gone out. Neither belongs with a team operator.
+    case "create_referral_code":
+      requireLeadership(session);
+      return jsonSuccess(await createReferralCode(supabaseAdmin, payload));
+    case "mark_referral_paid":
+      requireLeadership(session);
+      return jsonSuccess(
+        await markReferralPaid(supabaseAdmin, String(payload.referralId || "")),
+      );
     case "update_partner":
       requireLeadership(session);
       return jsonSuccess(
