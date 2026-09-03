@@ -7560,6 +7560,22 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
               note={`${formatNumber(workspace.counts?.activeRides)} active right now`}
               value={formatNumber(workspace.counts?.totalRides)}
             />
+            {/* The driver referral programme, which is a different arrangement
+                from the ride commission beside it and was invisible here until
+                now: an agent logged in to an empty portal while ops showed their
+                referrals. */}
+            <MetricCard
+              label="Drivers referred"
+              note={`${formatNumber(
+                (workspace.driverReferralTotals as AnyRecord)?.earned,
+              )} subscribed so far`}
+              value={formatNumber((workspace.driverReferralTotals as AnyRecord)?.signups)}
+            />
+            <MetricCard
+              label="Referral earnings owed"
+              note="Earned and not yet paid out"
+              value={formatCurrency((workspace.driverReferralTotals as AnyRecord)?.owed)}
+            />
             <MetricCard
               label="Commission due"
               note="Pending partner commission"
@@ -7571,6 +7587,37 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
               value={formatNumber(workspace.counts?.activeReferralCodes)}
             />
           </div>
+
+          {/* Per code, so an agent running more than one campaign can tell which
+              is working. Rendered only when they have driver referral codes at
+              all, rather than showing an empty table to every partner. */}
+          {((workspace.driverReferrals as AnyRecord[]) || []).length ? (
+            <div className="subcard">
+              <div className="subcard-header">
+                <div>
+                  <span>Driver referrals</span>
+                  <h4>Your codes</h4>
+                </div>
+              </div>
+              <DataTable
+                columns={[
+                  { label: "Code", render: (row) => String(row.code || "") },
+                  { label: "Rate", render: (row) => formatCurrency(row.rate) },
+                  { label: "Signed up", render: (row) => String(row.signups ?? 0) },
+                  { label: "Subscribed", render: (row) => String(row.earned_count ?? 0) },
+                  { label: "Owed", render: (row) => formatCurrency(row.owed_amount) },
+                  { label: "Paid", render: (row) => formatCurrency(row.paid_amount) },
+                  {
+                    label: "Earning until",
+                    render: (row) =>
+                      row.ends_at ? new Date(String(row.ends_at)).toLocaleDateString() : "—",
+                  },
+                ]}
+                emptyMessage="No driver referral codes yet."
+                rows={(workspace.driverReferrals as AnyRecord[]) || []}
+              />
+            </div>
+          ) : null}
 
           <div className="subgrid">
             <Subcard eyebrow="Partner profile" title={workspace.partner?.name || "Partner"}>
