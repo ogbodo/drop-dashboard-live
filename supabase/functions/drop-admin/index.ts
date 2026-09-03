@@ -190,6 +190,11 @@ const leadershipSections = new Set<DashboardSectionName>([
   "scheduled-rides",
   "finance",
   "partners",
+  // Leadership only, and its absence from staffSections below is the point:
+  // this is what every agent is owed. TypeScript does not police a Set the way
+  // it polices a Record, so adding a section to the union does NOT force it to
+  // be listed here -- which is exactly how it came to be missing.
+  "referrals",
   "support",
   "support-chat",
   "settings",
