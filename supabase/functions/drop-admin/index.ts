@@ -24,6 +24,7 @@ import {
   getSupportInboxData,
   grantDriverSubscription,
   markSupportThreadSeen,
+  sendReportReply,
   sendSupportInboxReply,
   sendSupportReply,
   sendPushNotification,
@@ -82,6 +83,7 @@ type DashboardActionName =
   | "toggle_account_status"
   | "send_support_reply"
   | "send_support_inbox_reply"
+  | "send_report_reply"
   | "mark_support_thread_seen";
 
 type DashboardSectionName =
@@ -1685,6 +1687,12 @@ const handleAction = async (request: Request) => {
       return jsonSuccess(
         await sendSupportInboxReply(supabaseAdmin, session, payload),
       );
+    // Answer the person who filed a report, in the same support_messages thread the
+    // inbox reply above uses. Same operator gate: replying to a report is the same
+    // trust as replying in the inbox.
+    case "send_report_reply":
+      requireTeamOperator(session);
+      return jsonSuccess(await sendReportReply(supabaseAdmin, session, payload));
     case "list_safety_alerts":
       // Staff, not just leadership. An emergency is the wrong moment to
       // discover that the only person who can open the alert is asleep.
