@@ -2024,6 +2024,64 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
     });
   }
 
+  async function handleReviewOutreach(review: AnyRecord) {
+    const reviewerId = String(review.reviewer_id || "");
+    const reviewerName = String(review.reviewer?.full_name || "the reviewer");
+
+    if (!reviewerId) {
+      notify(
+        "No reviewer to reach",
+        "This review is not tied to an account we can message.",
+        "warning",
+      );
+      return;
+    }
+
+    const rating = String(review.rating || "low");
+    const rawComment = String(review.comment || "").trim();
+    const comment =
+      rawComment.length > 160 ? `${rawComment.slice(0, 160)}...` : rawComment;
+
+    const promptResult = await requestPrompt({
+      confirmLabel: "Send message",
+      fields: [
+        {
+          label: `Message to ${reviewerName}`,
+          name: "content",
+          placeholder: "This lands in their in-app support chat, with a notification.",
+          required: true,
+          type: "textarea",
+        },
+      ],
+      message: comment
+        ? `Reaching out about their ${rating}-star review: "${comment}"`
+        : `Reaching out about their ${rating}-star review.`,
+      title: "Reach out about this review",
+      tone: "primary",
+    });
+
+    if (!promptResult) {
+      return;
+    }
+
+    const content = String(promptResult.content || "").trim();
+    if (!content) {
+      return;
+    }
+
+    await runWithPending(`review:${String(review.id)}:outreach`, async () => {
+      // Reuses the support inbox reply: it writes public.support_messages for the
+      // reviewer and pushes, the same thread their app already reads.
+      await adminAction("send_support_inbox_reply", { content, userId: reviewerId });
+      await refreshSections(["support"]);
+      notify(
+        "Message sent",
+        `Your message reached ${reviewerName} in their support chat.`,
+        "success",
+      );
+    });
+  }
+
   async function handleScheduledCancel(scheduledRideId: string) {
     await runConfirmedAction(
       `scheduled-cancel:${scheduledRideId}`,
@@ -6207,6 +6265,24 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
                         title={review.reviewer?.full_name || "Unknown reviewer"}
                       />
                     ),
+                  },
+                  {
+                    label: "Actions",
+                    render: (review) =>
+                      canModerateSupport ? (
+                        <div className="inline-actions">
+                          <button
+                            className="primary-button"
+                            disabled={isActionPending(`review:${String(review.id)}:outreach`)}
+                            onClick={() => void handleReviewOutreach(review)}
+                            type="button"
+                          >
+                            {isActionPending(`review:${String(review.id)}:outreach`)
+                              ? "Sending..."
+                              : "Reach out"}
+                          </button>
+                        </div>
+                      ) : null,
                   },
                 ]}
                 emptyMessage="No low-rating reviews need attention right now."
