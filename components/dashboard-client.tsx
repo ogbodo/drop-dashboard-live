@@ -235,6 +235,23 @@ const formatCurrency = (value: unknown) =>
 const formatNumber = (value: unknown) =>
   new Intl.NumberFormat("en-US").format(Number(value || 0));
 
+// A referral code an operator does not have to think up. Optionally seeded from
+// the agent's name so the code reads back to them (JANESTORES4K7P), otherwise a
+// clean DROP prefix. The charset skips look-alikes (0/O, 1/I) so a code read off
+// a screen or spoken aloud is not mistyped.
+const REFERRAL_CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+const makeReferralCode = (seed?: string) => {
+  const base = String(seed || "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "")
+    .slice(0, 10);
+  let suffix = "";
+  for (let i = 0; i < 4; i += 1) {
+    suffix += REFERRAL_CODE_CHARS[Math.floor(Math.random() * REFERRAL_CODE_CHARS.length)];
+  }
+  return `${base || "DROP"}${suffix}`.slice(0, 16);
+};
+
 const formatMoney = (value: unknown, currency: unknown = "NGN") => {
   const currencyCode = String(currency || "NGN").toUpperCase();
   const amount = Number(value || 0);
@@ -1205,6 +1222,10 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
   const [referralOwnerType, setReferralOwnerType] = useState<"partner" | "driver">("partner");
   const [referralPartnerId, setReferralPartnerId] = useState("");
   const [referralCode, setReferralCode] = useState("");
+  // Whether the operator has hand-typed the code. Until they do, we keep filling
+  // it for them (a fresh one on open, a name-based one when an agent is picked);
+  // once they touch it, we leave their code alone.
+  const [referralCodeTouched, setReferralCodeTouched] = useState(false);
   const [supportReplyBody, setSupportReplyBody] = useState("");
   const [supportReplyAudience, setSupportReplyAudience] = useState<"both" | "customer" | "driver">(
     "both",
@@ -1642,6 +1663,15 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
       void loadSingleSection("partners", { background: true });
     }
   }, [activeSection]);
+
+  // Keep a ready-made code in the field so an operator never has to invent one.
+  // Only while they have not typed their own, and only when the box is empty (on
+  // open, or after a create resets it).
+  useEffect(() => {
+    if (activeSection === "referrals" && !referralCode && !referralCodeTouched) {
+      setReferralCode(makeReferralCode());
+    }
+  }, [activeSection, referralCode, referralCodeTouched]);
 
   useEffect(() => {
     if (!session || !filterableSections.has(activeSection)) {
@@ -5735,6 +5765,8 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
         formElement.reset();
         setReferralPartnerId("");
         setReferralCode("");
+        // Untouched again, so a fresh code auto-fills for the next one.
+        setReferralCodeTouched(false);
         await refreshSections(["referrals"]);
       },
     );
@@ -5769,28 +5801,33 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
           <ErrorState message={sectionErrors.referrals} title="Referrals unavailable" />
         ) : (
           <>
-            <div className="stat-grid">
-              <div className="stat-card">
-                <span>Active codes</span>
-                <strong>{Number(totals.codes || 0)}</strong>
-              </div>
-              <div className="stat-card">
-                <span>Drivers signed up</span>
-                <strong>{Number(totals.signups || 0)}</strong>
-              </div>
-              <div className="stat-card">
-                <span>Converted</span>
-                <strong>{Number(totals.earned || 0)}</strong>
-              </div>
+            <div className="metric-grid">
+              <MetricCard
+                label="Active codes"
+                note="Live referral codes"
+                value={formatNumber(totals.codes)}
+              />
+              <MetricCard
+                label="Drivers signed up"
+                note="Joined on a code"
+                value={formatNumber(totals.signups)}
+              />
+              <MetricCard
+                label="Converted"
+                note="Signed up and subscribed"
+                value={formatNumber(totals.earned)}
+              />
               {/* The number the CEO asked for: what we owe right now. */}
-              <div className="stat-card">
-                <span>Owed</span>
-                <strong>{formatCurrency(totals.owed)}</strong>
-              </div>
-              <div className="stat-card">
-                <span>Paid out</span>
-                <strong>{formatCurrency(totals.paid)}</strong>
-              </div>
+              <MetricCard
+                label="Owed"
+                note="Earned, not yet settled"
+                value={formatCurrency(totals.owed)}
+              />
+              <MetricCard
+                label="Paid out"
+                note="Already settled"
+                value={formatCurrency(totals.paid)}
+              />
             </div>
 
             <div className="subgrid">
@@ -5838,17 +5875,33 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
                     Code
                     <input
                       name="code"
-                      onChange={(event) =>
+                      onChange={(event) => {
                         setReferralCode(
                           event.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ""),
-                        )
-                      }
+                        );
+                        setReferralCodeTouched(true);
+                      }}
                       pattern="[A-Za-z0-9]{4,16}"
-                      placeholder="JOHN500"
                       required
                       title="4 to 16 letters or digits"
                       value={referralCode}
                     />
+                    <button
+                      className="ghost-button"
+                      onClick={() => {
+                        const agentName = partners.find(
+                          (row) => String(row.id) === referralPartnerId,
+                        )?.name;
+                        setReferralCode(
+                          makeReferralCode(agentName ? String(agentName) : undefined),
+                        );
+                        setReferralCodeTouched(false);
+                      }}
+                      style={{ marginTop: "6px", width: "fit-content" }}
+                      type="button"
+                    >
+                      Regenerate
+                    </button>
                   </label>
                   <label>
                     Belongs to
@@ -5864,7 +5917,7 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
                       <option value="driver">A driver</option>
                     </select>
                   </label>
-                  {referralOwnerType === "partner" && partners.length ? (
+                  {referralOwnerType === "partner" ? (
                     <label>
                       Agent
                       <select
@@ -5873,23 +5926,19 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
                           const id = event.target.value;
                           setReferralPartnerId(id);
                           const picked = partners.find((row) => String(row.id) === id);
-                          // Suggest a code from the agent's name, but never clobber one
-                          // an operator has already typed.
-                          if (picked && !referralCode) {
-                            const base = String(picked.slug || picked.name || "")
-                              .toUpperCase()
-                              .replace(/[^A-Z0-9]/g, "")
-                              .slice(0, 12);
-                            if (base) {
-                              setReferralCode(`${base}500`.slice(0, 16));
-                            }
+                          // Re-suggest a code from the agent's name unless the operator
+                          // has already typed their own.
+                          if (picked && !referralCodeTouched) {
+                            setReferralCode(
+                              makeReferralCode(String(picked.name || picked.slug || "")),
+                            );
                           }
                         }}
                         required
                         value={referralPartnerId}
                       >
                         <option disabled value="">
-                          Choose an agent
+                          {partners.length ? "Choose an agent" : "No agents yet"}
                         </option>
                         {partners.map((row) => (
                           <option key={String(row.id)} value={String(row.id)}>
@@ -5897,17 +5946,23 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
                           </option>
                         ))}
                       </select>
+                      {partners.length ? null : (
+                        <button
+                          className="ghost-button"
+                          onClick={() => setActiveSection("partners")}
+                          style={{ marginTop: "4px", width: "fit-content" }}
+                          type="button"
+                        >
+                          Create an agent in Partners
+                        </button>
+                      )}
                     </label>
                   ) : (
                     <label>
-                      {referralOwnerType === "partner" ? "Agent ID" : "Driver ID"}
+                      Driver account ID
                       <input
                         name="owner_id"
-                        placeholder={
-                          referralOwnerType === "partner"
-                            ? "Open Partners once to load the picker"
-                            : "driver uuid"
-                        }
+                        placeholder="The driver's account id"
                         required
                       />
                     </label>
