@@ -241,7 +241,10 @@ const formatNumber = (value: unknown) =>
 // a screen or spoken aloud is not mistyped.
 const REFERRAL_CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const makeReferralCode = (seed?: string) => {
-  const base = String(seed || "")
+  // Just the first name, so "Jane Doe Motors" becomes JANE plus a random tail
+  // rather than the whole name run together.
+  const firstName = String(seed || "").trim().split(/\s+/)[0] || "";
+  const base = firstName
     .toUpperCase()
     .replace(/[^A-Z0-9]/g, "")
     .slice(0, 10);

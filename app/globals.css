@@ -1007,7 +1007,7 @@ textarea {
 .toast-stack {
   position: fixed;
   right: 24px;
-  bottom: 24px;
+  top: 24px;
   display: grid;
   gap: 10px;
   z-index: 50;
@@ -1522,7 +1522,7 @@ textarea {
   .toast-stack {
     right: 14px;
     left: 14px;
-    bottom: 14px;
+    top: 14px;
   }
 
   .toast {
