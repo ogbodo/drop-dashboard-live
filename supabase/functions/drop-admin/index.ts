@@ -24,6 +24,8 @@ import {
   getSupportData,
   getSupportInboxData,
   grantDriverSubscription,
+  flagDriver,
+  resolveDriverFlag,
   markSupportThreadSeen,
   sendReportReply,
   sendSupportInboxReply,
@@ -69,6 +71,8 @@ type DashboardActionName =
   | "update_partner_branding"
   | "update_partner_commission"
   | "update_report"
+  | "flag_driver"
+  | "resolve_driver_flag"
   | "send_push_notification"
   | "update_app_config"
   | "update_dispatch_settings"
@@ -1873,6 +1877,14 @@ const handleAction = async (request: Request) => {
       return jsonSuccess(
         await updateReport(supabaseAdmin, String(payload.reportId || ""), payload),
       );
+    // Flagging a driver is moderation, the same trust as working a report or
+    // replying in support, so a team operator can do it.
+    case "flag_driver":
+      requireTeamOperator(session);
+      return jsonSuccess(await flagDriver(supabaseAdmin, session, payload));
+    case "resolve_driver_flag":
+      requireTeamOperator(session);
+      return jsonSuccess(await resolveDriverFlag(supabaseAdmin, session, payload));
     case "send_push_notification":
       requireLeadership(session);
       return jsonSuccess(await sendPushNotification(supabaseAdmin, payload));
