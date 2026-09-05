@@ -2056,6 +2056,62 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
     );
   }
 
+  async function handleReportReply(report: AnyRecord) {
+    const reporterName = String(report.reporter?.full_name || "the reporter");
+
+    if (!report.reporter_id) {
+      notify(
+        "No reporter to reply to",
+        "This report was filed without an account we can answer.",
+        "warning",
+      );
+      return;
+    }
+
+    const category = String(report.issue_category || "General");
+    const rawDescription = String(report.description || "").trim();
+    // Keep the reminder of what they reported short enough not to swamp the dialog.
+    const description =
+      rawDescription.length > 200 ? `${rawDescription.slice(0, 200)}...` : rawDescription;
+
+    const promptResult = await requestPrompt({
+      confirmLabel: "Send reply",
+      fields: [
+        {
+          label: `Reply to ${reporterName}`,
+          name: "content",
+          placeholder: "This lands in their in-app support chat, with a notification.",
+          required: true,
+          type: "textarea",
+        },
+      ],
+      message: description
+        ? `Report (${category}): ${description}`
+        : `Answer the ${category.toLowerCase()} report from ${reporterName}.`,
+      title: "Reply to report",
+      tone: "primary",
+    });
+
+    if (!promptResult) {
+      return;
+    }
+
+    const content = String(promptResult.content || "").trim();
+    if (!content) {
+      return;
+    }
+
+    await runWithPending(`report:${String(report.id)}:reply`, async () => {
+      await adminAction("send_report_reply", { content, reportId: String(report.id) });
+      await refreshSections(["overview", "live-ops", "support"]);
+      notify(
+        "Reply sent",
+        `Your reply reached ${reporterName} in their support chat.`,
+        "success",
+      );
+    });
+  }
+
   async function submitNotification(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const audience = supportBroadcastDraft.audience;
@@ -5907,6 +5963,16 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
                     label: "Actions",
                     render: (report) => (
                       <div className="inline-actions">
+                        <button
+                          className="primary-button"
+                          disabled={isActionPending(`report:${String(report.id)}:reply`)}
+                          onClick={() => void handleReportReply(report)}
+                          type="button"
+                        >
+                          {isActionPending(`report:${String(report.id)}:reply`)
+                            ? "Sending..."
+                            : "Reply"}
+                        </button>
                         <button
                           className="ghost-button"
                           disabled={

@@ -55,6 +55,7 @@ export type DashboardActionName =
   | "toggle_account_status"
   | "send_support_reply"
   | "send_support_inbox_reply"
+  | "send_report_reply"
   | "mark_support_thread_seen";
 
 export type DashboardSectionName =
