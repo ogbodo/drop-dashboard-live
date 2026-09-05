@@ -53,6 +53,7 @@ export type DashboardActionName =
   | "mark_referral_paid"
   | "reset_password"
   | "toggle_account_status"
+  | "update_user_phone"
   | "send_support_reply"
   | "send_support_inbox_reply"
   | "mark_support_thread_seen";

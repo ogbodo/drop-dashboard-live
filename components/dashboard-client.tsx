@@ -1967,6 +1967,43 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
     );
   }
 
+  async function handleEditPhone(profile: AnyRecord) {
+    const name = String(profile.full_name || "this account");
+    const current = String(profile.phone || "");
+
+    const promptResult = await requestPrompt({
+      confirmLabel: "Update number",
+      fields: [
+        {
+          defaultValue: current,
+          label: "New phone number",
+          name: "phone",
+          placeholder: "+2348012345678",
+          required: true,
+          type: "text",
+        },
+      ],
+      message: `Change the number on ${name}. This updates the login itself, so the account signs in with the new number and the old one is freed for a fresh signup.`,
+      title: "Edit phone number",
+      tone: "primary",
+    });
+
+    if (!promptResult) {
+      return;
+    }
+
+    const phone = String(promptResult.phone || "").trim();
+    if (!phone || phone === current) {
+      return;
+    }
+
+    await runWithPending(`account:${String(profile.id)}:phone`, async () => {
+      await adminAction("update_user_phone", { phone, userId: String(profile.id) });
+      await refreshSections(["customers", "drivers"]);
+      notify("Number updated", `${name} now uses the new number.`, "success");
+    });
+  }
+
   async function handleScheduledCancel(scheduledRideId: string) {
     await runConfirmedAction(
       `scheduled-cancel:${scheduledRideId}`,
@@ -4404,6 +4441,16 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
                         >
                           Grant free month
                         </button>
+                        <button
+                          className="secondary-button"
+                          disabled={isActionPending(`account:${String(selectedDriver.id)}:phone`)}
+                          onClick={() => void handleEditPhone(selectedDriver)}
+                          type="button"
+                        >
+                          {isActionPending(`account:${String(selectedDriver.id)}:phone`)
+                            ? "Updating..."
+                            : "Edit phone"}
+                        </button>
                       </div>
                     ) : null}
 
@@ -4665,6 +4712,16 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
                           type="button"
                         >
                           {selectedCustomer.is_verified ? "Mark unverified" : "Mark verified"}
+                        </button>
+                        <button
+                          className="secondary-button"
+                          disabled={isActionPending(`account:${String(selectedCustomer.id)}:phone`)}
+                          onClick={() => void handleEditPhone(selectedCustomer)}
+                          type="button"
+                        >
+                          {isActionPending(`account:${String(selectedCustomer.id)}:phone`)
+                            ? "Updating..."
+                            : "Edit phone"}
                         </button>
                       </div>
                     ) : null}

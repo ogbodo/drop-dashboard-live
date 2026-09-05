@@ -1,3 +1,4 @@
+import { createClient } from "npm:@supabase/supabase-js@2.34.0";
 import {
   cancelRideAsAdmin,
   cancelScheduledRideAsAdmin,
@@ -80,6 +81,7 @@ type DashboardActionName =
   | "mark_referral_paid"
   | "reset_password"
   | "toggle_account_status"
+  | "update_user_phone"
   | "send_support_reply"
   | "send_support_inbox_reply"
   | "mark_support_thread_seen";
@@ -1646,6 +1648,74 @@ const toggleAccountStatus = async (
   return sanitizeAccount(updated);
 };
 
+// Mirror the app's formattedPhone so an operator can type a number the way a
+// rider would (0803..., 803..., or +234803...) and it lands as the same E.164
+// string the signup flow stores.
+const normalizeE164 = (raw: string) => {
+  const trimmed = String(raw || "").trim();
+  if (!trimmed) {
+    return "";
+  }
+  return trimmed.startsWith("+") ? trimmed : `+234${trimmed.replace(/^0/, "")}`;
+};
+
+// Change the phone number on a rider or driver account. Signup and login are
+// phone based (auth.signUp / signInWithPassword by phone), so the number lives in
+// auth.users and that is the copy that must change; the profile's copy is kept in
+// step. Moving an account onto a different number frees the old one for a fresh
+// registration, which is what the OTP test accounts need, and it doubles as the
+// fix for a mistyped number. Leadership only.
+const updateUserPhone = async (
+  session: DashboardSession,
+  payload: AnyRecord,
+) => {
+  requireLeadership(session);
+
+  const userId = String(payload.userId || "").trim();
+  const phone = normalizeE164(String(payload.phone || ""));
+
+  if (!userId) {
+    throw errorWithStatus("A user id is required.", 400);
+  }
+  if (!/^\+\d{7,15}$/.test(phone)) {
+    throw errorWithStatus(
+      "Enter a valid number in international format, for example +2348012345678.",
+      400,
+    );
+  }
+
+  // Friendly pre-check. Auth enforces phone uniqueness too, but a raw GoTrue
+  // error reads worse than this.
+  const existing = await supabaseAdmin.selectOne<AnyRecord>("profiles", {
+    phone: `eq.${phone}`,
+    select: "id",
+  });
+  if (existing?.id && String(existing.id) !== userId) {
+    throw errorWithStatus("That number is already on another account.", 409);
+  }
+
+  // Auth is the source of truth for the login, so change it there first, confirmed
+  // so the account can still sign in with the new number.
+  const authClient = createClient(env.supabaseUrl, env.supabaseServiceRoleKey, {
+    auth: { persistSession: false },
+  });
+  const { error } = await authClient.auth.admin.updateUserById(userId, {
+    phone,
+    phone_confirm: true,
+  });
+  if (error) {
+    throw error;
+  }
+
+  await supabaseAdmin.update(
+    "profiles",
+    { phone, updated_at: new Date().toISOString() },
+    { id: `eq.${userId}` },
+  );
+
+  return { phone, userId };
+};
+
 const handleAction = async (request: Request) => {
   enforceRateLimit(request, "edge-admin-actions", 120, 1000 * 60);
   const session = await requireSession(request, { requireCsrf: true });
@@ -1662,6 +1732,8 @@ const handleAction = async (request: Request) => {
       return jsonSuccess(await createPartnerAccessAccount(session, payload));
     case "toggle_account_status":
       return jsonSuccess(await toggleAccountStatus(session, payload));
+    case "update_user_phone":
+      return jsonSuccess(await updateUserPhone(session, payload));
     case "mark_support_thread_seen":
       return jsonSuccess(
         await markSupportThreadSeen(
