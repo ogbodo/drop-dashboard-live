@@ -40,6 +40,8 @@ export type DashboardActionName =
   | "update_partner_branding"
   | "update_partner_commission"
   | "update_report"
+  | "flag_driver"
+  | "resolve_driver_flag"
   | "send_push_notification"
   | "update_app_config"
   | "update_dispatch_settings"

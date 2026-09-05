@@ -2082,6 +2082,68 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
     });
   }
 
+  async function handleFlagDriver(
+    driverId: string,
+    driverName: string,
+    sourceReviewId?: string,
+  ) {
+    if (!driverId) {
+      return;
+    }
+
+    const promptResult = await requestPrompt({
+      confirmLabel: "Flag driver",
+      fields: [
+        {
+          label: `Why flag ${driverName}?`,
+          name: "reason",
+          placeholder: "What ops should look into, in a line or two.",
+          required: true,
+          type: "textarea",
+        },
+      ],
+      message: `This raises an internal flag on ${driverName} for the team to follow up. The driver does not see it.`,
+      title: "Flag this driver",
+      tone: "danger",
+    });
+
+    if (!promptResult) {
+      return;
+    }
+
+    const reason = String(promptResult.reason || "").trim();
+    if (!reason) {
+      return;
+    }
+
+    await runWithPending(`driver:${driverId}:flag`, async () => {
+      await adminAction("flag_driver", {
+        driverId,
+        reason,
+        sourceReviewId: sourceReviewId || null,
+      });
+      await refreshSections(["drivers", "support"]);
+      notify("Driver flagged", `${driverName} was flagged for follow-up.`, "success");
+    });
+  }
+
+  async function handleResolveDriverFlag(flagId: string, driverName: string) {
+    await runConfirmedAction(
+      `flag:${flagId}:resolve`,
+      {
+        confirmLabel: "Resolve flag",
+        message: `This clears the flag on ${driverName}. Do it once the follow-up is done.`,
+        title: "Resolve this flag?",
+        tone: "success",
+      },
+      async () => {
+        await adminAction("resolve_driver_flag", { flagId });
+        await refreshSections(["drivers"]);
+        notify("Flag resolved", `The flag on ${driverName} was cleared.`, "success");
+      },
+    );
+  }
+
   async function handleScheduledCancel(scheduledRideId: string) {
     await runConfirmedAction(
       `scheduled-cancel:${scheduledRideId}`,
@@ -4371,6 +4433,16 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
                               label={driver.has_paid ? "Paid" : "Unpaid"}
                               tone={driver.has_paid ? "success" : "warning"}
                             />
+                            {(driver.flags || []).length ? (
+                              <Pill
+                                label={
+                                  (driver.flags || []).length > 1
+                                    ? `Flagged ${(driver.flags || []).length}`
+                                    : "Flagged"
+                                }
+                                tone="danger"
+                              />
+                            ) : null}
                           </div>
                           <span className="muted">
                             Expires {formatDate(driver.subscription_expires_at)}
@@ -4585,6 +4657,65 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
                             ? "Updating..."
                             : "Edit phone"}
                         </button>
+                      </div>
+                    ) : null}
+
+                    {canModerateSupport ? (
+                      <div className="detail-note-card">
+                        <div
+                          className="inline-actions"
+                          style={{ justifyContent: "space-between" }}
+                        >
+                          <span className="detail-section-label">
+                            {(selectedDriver.flags || []).length
+                              ? `Open flags (${(selectedDriver.flags || []).length})`
+                              : "Flags"}
+                          </span>
+                          <button
+                            className="danger-button"
+                            disabled={isActionPending(`driver:${String(selectedDriver.id)}:flag`)}
+                            onClick={() =>
+                              void handleFlagDriver(
+                                String(selectedDriver.id),
+                                String(selectedDriver.full_name || "this driver"),
+                              )
+                            }
+                            type="button"
+                          >
+                            {isActionPending(`driver:${String(selectedDriver.id)}:flag`)
+                              ? "Flagging..."
+                              : "Flag driver"}
+                          </button>
+                        </div>
+                        {(selectedDriver.flags as AnyRecord[] | undefined)?.length ? (
+                          (selectedDriver.flags as AnyRecord[]).map((flag) => (
+                            <div className="detail-list-row" key={String(flag.id)}>
+                              <Stack
+                                subtitle={`${String(
+                                  flag.created_by_username || "someone",
+                                )} · ${formatDateTime(flag.created_at)}`}
+                                title={String(flag.reason || "No reason given")}
+                              />
+                              <button
+                                className="ghost-button"
+                                disabled={isActionPending(`flag:${String(flag.id)}:resolve`)}
+                                onClick={() =>
+                                  void handleResolveDriverFlag(
+                                    String(flag.id),
+                                    String(selectedDriver.full_name || "this driver"),
+                                  )
+                                }
+                                type="button"
+                              >
+                                {isActionPending(`flag:${String(flag.id)}:resolve`)
+                                  ? "Resolving..."
+                                  : "Resolve"}
+                              </button>
+                            </div>
+                          ))
+                        ) : (
+                          <span className="muted">No open flags on this driver.</span>
+                        )}
                       </div>
                     ) : null}
 
@@ -6281,6 +6412,26 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
                               ? "Sending..."
                               : "Reach out"}
                           </button>
+                          {review.target?.role === "driver" && review.target_id ? (
+                            <button
+                              className="danger-button"
+                              disabled={isActionPending(
+                                `driver:${String(review.target_id)}:flag`,
+                              )}
+                              onClick={() =>
+                                void handleFlagDriver(
+                                  String(review.target_id),
+                                  String(review.target?.full_name || "this driver"),
+                                  String(review.id),
+                                )
+                              }
+                              type="button"
+                            >
+                              {isActionPending(`driver:${String(review.target_id)}:flag`)
+                                ? "Flagging..."
+                                : "Flag driver"}
+                            </button>
+                          ) : null}
                         </div>
                       ) : null,
                   },
