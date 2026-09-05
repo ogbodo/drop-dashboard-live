@@ -1199,6 +1199,12 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
   } | null>(null);
   const [promptValues, setPromptValues] = useState<Record<string, string>>({});
   const [supportComposer, setSupportComposer] = useState<"broadcast" | "reply" | null>(null);
+  // Onboarding an agent is picking them from a list, not pasting a uuid. The owner
+  // type drives which picker shows, and the code is suggested from the partner so
+  // the common case is one dropdown and a confirm.
+  const [referralOwnerType, setReferralOwnerType] = useState<"partner" | "driver">("partner");
+  const [referralPartnerId, setReferralPartnerId] = useState("");
+  const [referralCode, setReferralCode] = useState("");
   const [supportReplyBody, setSupportReplyBody] = useState("");
   const [supportReplyAudience, setSupportReplyAudience] = useState<"both" | "customer" | "driver">(
     "both",
@@ -1622,6 +1628,20 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
       queueSignalRefresh();
     }
   }, [activeSection, isActiveSectionLoading]);
+
+  // The referral form needs the partner list to offer a picker, but partners are
+  // their own lazily-loaded section. Pull them in the background the first time the
+  // referrals tab is opened. A failure here only touches the partners panel, which
+  // the agent is not looking at; the form degrades to a plain id field regardless.
+  useEffect(() => {
+    if (
+      activeSection === "referrals" &&
+      !loadedSectionsRef.current.partners &&
+      !loadingSectionsRef.current.partners
+    ) {
+      void loadSingleSection("partners", { background: true });
+    }
+  }, [activeSection]);
 
   useEffect(() => {
     if (!session || !filterableSections.has(activeSection)) {
@@ -5408,7 +5428,11 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
           notes: String(form.get("notes") || ""),
           partner_id: ownerType === "partner" ? ownerId : null,
         });
+        // formElement.reset() clears the uncontrolled fields; the controlled ones
+        // are React state and have to be cleared by hand.
         formElement.reset();
+        setReferralPartnerId("");
+        setReferralCode("");
         await refreshSections(["referrals"]);
       },
     );
@@ -5512,38 +5536,122 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
                     Code
                     <input
                       name="code"
+                      onChange={(event) =>
+                        setReferralCode(
+                          event.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ""),
+                        )
+                      }
                       pattern="[A-Za-z0-9]{4,16}"
                       placeholder="JOHN500"
                       required
                       title="4 to 16 letters or digits"
+                      value={referralCode}
                     />
                   </label>
                   <label>
                     Belongs to
-                    <select defaultValue="partner" name="owner_type">
+                    <select
+                      name="owner_type"
+                      onChange={(event) => {
+                        setReferralOwnerType(event.target.value as "partner" | "driver");
+                        setReferralPartnerId("");
+                      }}
+                      value={referralOwnerType}
+                    >
                       <option value="partner">Acquisition agent (partner)</option>
                       <option value="driver">A driver</option>
                     </select>
                   </label>
-                  <label>
-                    Owner ID
-                    <input name="owner_id" placeholder="partner or driver uuid" required />
-                  </label>
+                  {referralOwnerType === "partner" && partners.length ? (
+                    <label>
+                      Agent
+                      <select
+                        name="owner_id"
+                        onChange={(event) => {
+                          const id = event.target.value;
+                          setReferralPartnerId(id);
+                          const picked = partners.find((row) => String(row.id) === id);
+                          // Suggest a code from the agent's name, but never clobber one
+                          // an operator has already typed.
+                          if (picked && !referralCode) {
+                            const base = String(picked.slug || picked.name || "")
+                              .toUpperCase()
+                              .replace(/[^A-Z0-9]/g, "")
+                              .slice(0, 12);
+                            if (base) {
+                              setReferralCode(`${base}500`.slice(0, 16));
+                            }
+                          }
+                        }}
+                        required
+                        value={referralPartnerId}
+                      >
+                        <option disabled value="">
+                          Choose an agent
+                        </option>
+                        {partners.map((row) => (
+                          <option key={String(row.id)} value={String(row.id)}>
+                            {String(row.name || row.slug || row.id)}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  ) : (
+                    <label>
+                      {referralOwnerType === "partner" ? "Agent ID" : "Driver ID"}
+                      <input
+                        name="owner_id"
+                        placeholder={
+                          referralOwnerType === "partner"
+                            ? "Open Partners once to load the picker"
+                            : "driver uuid"
+                        }
+                        required
+                      />
+                    </label>
+                  )}
                   <label>
                     Pays per subscribed driver
                     <input defaultValue={500} min={0} name="commission_amount" type="number" />
                   </label>
-                  {/* No default. Three months for the lead agent and one for a
-                      driver is the entire difference between the two deals. */}
+                  {/* Three months for the lead agent, one for a driver, is the whole
+                      difference between the two deals. Default to the window that goes
+                      with the chosen owner rather than leaving it blank for someone to
+                      fill wrong in a hurry; the key remounts it when the owner changes.
+                      Still editable for the odd case that needs a different length. */}
                   <label>
                     Window (months)
-                    <input max={24} min={1} name="months" placeholder="3" required type="number" />
+                    <input
+                      defaultValue={referralOwnerType === "partner" ? 3 : 1}
+                      key={referralOwnerType}
+                      max={24}
+                      min={1}
+                      name="months"
+                      required
+                      type="number"
+                    />
                   </label>
                   <label>
                     Notes
                     <input name="notes" placeholder="Optional" />
                   </label>
                 </div>
+                {referralPartnerId
+                  ? (() => {
+                      const existing = codes.find(
+                        (row) => String(row.partner_id || "") === referralPartnerId,
+                      );
+                      return existing ? (
+                        <p className="muted" style={{ marginTop: "0.5rem" }}>
+                          This agent already has code {String(existing.code)}
+                          {existing.code_status && existing.code_status !== "active"
+                            ? ` (${String(existing.code_status)})`
+                            : ""}
+                          . A second code splits their referrals across two links.
+                        </p>
+                      ) : null;
+                    })()
+                  : null}
               </form>
             </div>
 
