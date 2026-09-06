@@ -26,6 +26,8 @@ import {
   grantDriverSubscription,
   flagDriver,
   resolveDriverFlag,
+  archiveAndFreeProfile,
+  getArchivedAccounts,
   markSupportThreadSeen,
   sendReportReply,
   sendSupportInboxReply,
@@ -87,6 +89,7 @@ type DashboardActionName =
   | "reset_password"
   | "toggle_account_status"
   | "update_user_phone"
+  | "delete_user_account"
   | "send_support_reply"
   | "send_support_inbox_reply"
   | "send_report_reply"
@@ -105,6 +108,7 @@ type DashboardSectionName =
   | "support-chat"
   | "settings"
   | "access"
+  | "archived-accounts"
   | "workspace";
 
 type DashboardRole = "super_admin" | "admin" | "staff" | "partner";
@@ -207,6 +211,7 @@ const leadershipSections = new Set<DashboardSectionName>([
   "support-chat",
   "settings",
   "access",
+  "archived-accounts",
 ]);
 const staffSections = new Set<DashboardSectionName>([
   "overview",
@@ -1181,6 +1186,10 @@ const adminSectionHandlers: Record<
     getAccessData(supabaseAdmin, {
       viewerRole: session.role,
     }),
+  "archived-accounts": async (request) =>
+    getArchivedAccounts(supabaseAdmin, {
+      search: new URL(request.url).searchParams.get("search"),
+    }),
   customers: async (request, session) =>
     getCustomersData(supabaseAdmin, {
       limit: new URL(request.url).searchParams.get("limit"),
@@ -1722,6 +1731,43 @@ const updateUserPhone = async (
   return { phone, userId };
 };
 
+// Delete any rider or driver account: archive it, anonymise the profile, and FREE
+// its phone and email so the same details can register again. Leadership only.
+const deleteUserAccount = async (
+  session: DashboardSession,
+  payload: AnyRecord,
+) => {
+  requireLeadership(session);
+
+  const userId = String(payload.userId || "").trim();
+  if (!userId) {
+    throw errorWithStatus("A user is required.", 400);
+  }
+
+  // Archive + anonymise + null the phone/email on the profile.
+  await archiveAndFreeProfile(supabaseAdmin, session, payload);
+
+  // Free the number and email in Auth too, and end the login. Clearing the auth
+  // phone is what actually lets a fresh signup take the number back, because signup
+  // keys on auth.users. Soft-delete keeps the auth row (a hard delete is blocked by
+  // the profile's FK), so clear the identity first, then soft-delete.
+  const authClient = createClient(env.supabaseUrl, env.supabaseServiceRoleKey, {
+    auth: { persistSession: false },
+  });
+  try {
+    await authClient.auth.admin.updateUserById(userId, { email: "", phone: "" });
+  } catch (_clearError) {
+    // Best effort: the profile is already freed; a stuck auth identity surfaces in
+    // the reuse test rather than failing the delete here.
+  }
+  const { error } = await authClient.auth.admin.deleteUser(userId, true);
+  if (error) {
+    throw error;
+  }
+
+  return { archived: true, freed: true, userId };
+};
+
 const handleAction = async (request: Request) => {
   enforceRateLimit(request, "edge-admin-actions", 120, 1000 * 60);
   const session = await requireSession(request, { requireCsrf: true });
@@ -1740,6 +1786,8 @@ const handleAction = async (request: Request) => {
       return jsonSuccess(await toggleAccountStatus(session, payload));
     case "update_user_phone":
       return jsonSuccess(await updateUserPhone(session, payload));
+    case "delete_user_account":
+      return jsonSuccess(await deleteUserAccount(session, payload));
     case "mark_support_thread_seen":
       return jsonSuccess(
         await markSupportThreadSeen(

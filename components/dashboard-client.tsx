@@ -77,6 +77,7 @@ const leadershipSectionOrder: SectionKey[] = [
   "partners",
   "referrals",
   "settings",
+  "archived-accounts",
 ];
 
 const staffSectionOrder: SectionKey[] = [
@@ -114,6 +115,13 @@ const sectionDescriptors: Record<SectionKey, SectionDescriptor> = {
     eyebrow: "Admin access",
     label: "Admins",
     title: "Admins, passwords, and permissions",
+  },
+  "archived-accounts": {
+    description:
+      "Every deleted account, admin or self. An admin delete frees the phone and email for reuse; a self-delete keeps them locked.",
+    eyebrow: "Account records",
+    label: "Archived",
+    title: "Archived accounts",
   },
   customers: {
     description:
@@ -210,6 +218,7 @@ const sectionDescriptors: Record<SectionKey, SectionDescriptor> = {
 
 const initialSectionData: Record<SectionKey, AnyRecord | AnyRecord[] | null> = {
   access: null,
+  "archived-accounts": null,
   customers: null,
   drivers: null,
   finance: null,
@@ -2054,6 +2063,53 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
       await adminAction("update_user_phone", { phone, userId: String(profile.id) });
       await refreshSections(["customers", "drivers"]);
       notify("Number updated", `${name} now uses the new number.`, "success");
+    });
+  }
+
+  async function handleDeleteAccount(profile: AnyRecord) {
+    const name = String(profile.full_name || "this account");
+    const phone = String(profile.phone || "").trim();
+    // Type-to-confirm, because this is destructive. Match the phone when there is
+    // one; fall back to the word DELETE for an account whose number is already gone.
+    const confirmToken = phone || "DELETE";
+
+    const promptResult = await requestPrompt({
+      confirmLabel: "Delete account",
+      fields: [
+        {
+          label: `Type ${confirmToken} to confirm`,
+          name: "confirm",
+          placeholder: confirmToken,
+          required: true,
+          type: "text",
+        },
+      ],
+      message: `This archives ${name}${phone ? ` (${phone})` : ""}, anonymises the account, and FREES the number and email so they can be used to register again. The person is signed out. Their trips and payments stay in the record. This is not the same as the person deleting their own account, which keeps the number locked.`,
+      title: "Delete and archive this account?",
+      tone: "danger",
+    });
+
+    if (!promptResult) {
+      return;
+    }
+
+    if (String(promptResult.confirm || "").trim() !== confirmToken) {
+      notify(
+        "Confirmation did not match",
+        `Type ${confirmToken} exactly to delete the account.`,
+        "warning",
+      );
+      return;
+    }
+
+    await runWithPending(`account:${String(profile.id)}:delete`, async () => {
+      await adminAction("delete_user_account", { userId: String(profile.id) });
+      await refreshSections(["customers", "drivers", "overview"]);
+      notify(
+        "Account deleted",
+        `${name} was archived and its number freed for reuse.`,
+        "success",
+      );
     });
   }
 
@@ -4690,6 +4746,16 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
                             ? "Updating..."
                             : "Edit phone"}
                         </button>
+                        <button
+                          className="danger-button"
+                          disabled={isActionPending(`account:${String(selectedDriver.id)}:delete`)}
+                          onClick={() => void handleDeleteAccount(selectedDriver)}
+                          type="button"
+                        >
+                          {isActionPending(`account:${String(selectedDriver.id)}:delete`)
+                            ? "Deleting..."
+                            : "Delete account"}
+                        </button>
                       </div>
                     ) : null}
 
@@ -5020,6 +5086,16 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
                           {isActionPending(`account:${String(selectedCustomer.id)}:phone`)
                             ? "Updating..."
                             : "Edit phone"}
+                        </button>
+                        <button
+                          className="danger-button"
+                          disabled={isActionPending(`account:${String(selectedCustomer.id)}:delete`)}
+                          onClick={() => void handleDeleteAccount(selectedCustomer)}
+                          type="button"
+                        >
+                          {isActionPending(`account:${String(selectedCustomer.id)}:delete`)
+                            ? "Deleting..."
+                            : "Delete account"}
                         </button>
                       </div>
                     ) : null}
@@ -8365,6 +8441,76 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
     </PanelShell>
   );
 
+  const renderArchivedAccountsSection = () => {
+    const data = (sectionData["archived-accounts"] || {}) as AnyRecord;
+    const accounts = (data.accounts as AnyRecord[]) || [];
+
+    return (
+      <PanelShell
+        descriptor={sectionDescriptors["archived-accounts"]}
+        lastRefresh={lastRefresh["archived-accounts"]}
+      >
+        {sectionErrors["archived-accounts"] ? (
+          <ErrorState
+            message={sectionErrors["archived-accounts"]}
+            title="Archive unavailable"
+          />
+        ) : (
+          <DataTable
+            columns={[
+              {
+                label: "Account",
+                render: (row) => (
+                  <Stack
+                    subtitle={String(row.role || "unknown role")}
+                    title={String(row.full_name || "Unnamed")}
+                  />
+                ),
+              },
+              {
+                label: "Contact",
+                render: (row) => (
+                  <Stack
+                    subtitle={String(row.email || "No email")}
+                    title={String(row.phone || "No phone")}
+                  />
+                ),
+              },
+              {
+                label: "How",
+                render: (row) => (
+                  <div className="tag-set">
+                    <Pill
+                      label={row.source === "admin" ? "Admin delete" : "Self delete"}
+                      tone={row.source === "admin" ? "warning" : "neutral"}
+                    />
+                    <Pill
+                      label={row.freed ? "Number freed" : "Number locked"}
+                      tone={row.freed ? "success" : "danger"}
+                    />
+                  </div>
+                ),
+              },
+              {
+                label: "By",
+                render: (row) => String(row.deleted_by || "system"),
+              },
+              {
+                label: "When",
+                render: (row) =>
+                  row.archived_at ? formatDateTime(row.archived_at) : "—",
+              },
+            ]}
+            emptyMessage="No archived accounts yet."
+            isLoading={loadingSections["archived-accounts"]}
+            loadingMessage="Loading archive..."
+            rows={accounts}
+          />
+        )}
+      </PanelShell>
+    );
+  };
+
   const renderActiveSection = () => {
     switch (activeSection) {
       case "overview":
@@ -8391,6 +8537,8 @@ export function DashboardClient({ csrfToken }: DashboardClientProps) {
         return renderSupportChatSection();
       case "access":
         return renderAccessSection();
+      case "archived-accounts":
+        return renderArchivedAccountsSection();
       case "settings":
         return renderSettingsSection();
       case "workspace":

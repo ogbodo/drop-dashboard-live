@@ -56,6 +56,7 @@ export type DashboardActionName =
   | "reset_password"
   | "toggle_account_status"
   | "update_user_phone"
+  | "delete_user_account"
   | "send_support_reply"
   | "send_support_inbox_reply"
   | "send_report_reply"
@@ -75,4 +76,5 @@ export type DashboardSectionName =
   | "support-chat"
   | "settings"
   | "access"
+  | "archived-accounts"
   | "workspace";
