@@ -1747,18 +1747,22 @@ const deleteUserAccount = async (
   // Archive + anonymise + null the phone/email on the profile.
   await archiveAndFreeProfile(supabaseAdmin, session, payload);
 
-  // Free the number and email in Auth too, and end the login. Clearing the auth
-  // phone is what actually lets a fresh signup take the number back, because signup
-  // keys on auth.users. Soft-delete keeps the auth row (a hard delete is blocked by
-  // the profile's FK), so clear the identity first, then soft-delete.
+  // End the login and free the identity in Auth. Two things are load-bearing for
+  // reuse and BOTH must stay: the profile-null above frees the profiles phone/email
+  // unique index, and the soft-delete below frees the number in Auth -- GoTrue's
+  // phone uniqueness excludes soft-deleted rows, so a fresh signup can take the
+  // number back (verified end-to-end on dev). A hard delete would be blocked by the
+  // profile's FK, hence soft.
   const authClient = createClient(env.supabaseUrl, env.supabaseServiceRoleKey, {
     auth: { persistSession: false },
   });
   try {
+    // Belt-and-suspenders, not the thing that frees the phone: GoTrue ignores an
+    // empty-string phone here (the soft-delete is what frees it), but this does
+    // clear the email. Best effort -- the profile is already freed either way.
     await authClient.auth.admin.updateUserById(userId, { email: "", phone: "" });
   } catch (_clearError) {
-    // Best effort: the profile is already freed; a stuck auth identity surfaces in
-    // the reuse test rather than failing the delete here.
+    // A stuck auth identity surfaces in the reuse test rather than failing the delete.
   }
   const { error } = await authClient.auth.admin.deleteUser(userId, true);
   if (error) {
