@@ -1006,11 +1006,16 @@ textarea {
 
 .toast-stack {
   position: fixed;
-  right: 24px;
   top: 24px;
+  left: 50%;
+  transform: translateX(-50%);
   display: grid;
   gap: 10px;
-  z-index: 50;
+  justify-items: center;
+  /* Above the activity-banner (45) and the confirm backdrop (60): a toast fires
+     into the same top-right corner the "Applying change..." banner uses, so it
+     was landing behind it. Top-centre keeps it clear of that corner and in view. */
+  z-index: 65;
 }
 
 .toast {
@@ -1523,6 +1528,8 @@ textarea {
     right: 14px;
     left: 14px;
     top: 14px;
+    /* Full width at the top on small screens; undo the desktop centre-shift. */
+    transform: none;
   }
 
   .toast {
